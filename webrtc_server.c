@@ -7,7 +7,8 @@
 #include <json-glib/json-glib.h>
 #include <string.h>
 
-typedef struct {
+typedef struct
+{
     GstElement *pipeline;
     GstElement *webrtc;
     SoupWebsocketConnection *ws;
@@ -15,8 +16,10 @@ typedef struct {
 
 static AppState app_state = {NULL, NULL, NULL};
 
-static void send_signaling_json(JsonObject *root) {
-    if (!app_state.ws) return;
+static void send_signaling_json(JsonObject *root)
+{
+    if (!app_state.ws)
+        return;
     JsonNode *node = json_node_new(JSON_NODE_OBJECT);
     json_node_set_object(node, root);
     JsonGenerator *gen = json_generator_new();
@@ -30,7 +33,8 @@ static void send_signaling_json(JsonObject *root) {
     json_node_free(node);
 }
 
-static void on_ice_candidate_cb(GstElement *webrtc, guint mline_index, gchar *candidate, gpointer user_data) {
+static void on_ice_candidate_cb(GstElement *webrtc, guint mline_index, gchar *candidate, gpointer user_data)
+{
     JsonObject *root = json_object_new();
     JsonObject *ice = json_object_new();
     json_object_set_string_member(ice, "candidate", candidate);
@@ -41,10 +45,13 @@ static void on_ice_candidate_cb(GstElement *webrtc, guint mline_index, gchar *ca
     send_signaling_json(root);
 }
 
-static void on_answer_created(GstPromise *promise, gpointer user_data) {
+static void on_answer_created(GstPromise *promise, gpointer user_data)
+{
     GstWebRTCSessionDescription *answer = NULL;
     const GstStructure *reply = gst_promise_get_reply(promise);
-    gst_structure_get(reply, "answer", GST_WEBRTC_SESSION_DESCRIPTION_TYPE, &answer, NULL);
+
+    // Fixed: Using GST_TYPE_WEBRTC_SESSION_DESCRIPTION for GLib type checking
+    gst_structure_get(reply, "answer", GST_TYPE_WEBRTC_SESSION_DESCRIPTION, &answer, NULL);
     gst_promise_unref(promise);
 
     promise = gst_promise_new();
@@ -52,7 +59,7 @@ static void on_answer_created(GstPromise *promise, gpointer user_data) {
     gst_promise_unref(promise);
 
     gchar *sdp_text = gst_sdp_message_as_text(answer->sdp);
-    
+
     JsonObject *root = json_object_new();
     JsonObject *sdp = json_object_new();
     json_object_set_string_member(sdp, "type", "answer");
@@ -66,7 +73,8 @@ static void on_answer_created(GstPromise *promise, gpointer user_data) {
     gst_webrtc_session_description_free(answer);
 }
 
-static void on_offer_received(const gchar *sdp_text) {
+static void on_offer_received(const gchar *sdp_text)
+{
     GstSDPMessage *sdp = NULL;
     gst_sdp_message_new(&sdp);
     gst_sdp_message_parse_buffer((guint8 *)sdp_text, strlen(sdp_text), sdp);
@@ -81,22 +89,28 @@ static void on_offer_received(const gchar *sdp_text) {
     gst_webrtc_session_description_free(offer);
 }
 
-static void on_ws_message(SoupWebsocketConnection *conn, SoupWebsocketDataType type, GBytes *message, gpointer user_data) {
-    if (!app_state.webrtc) return;
+static void on_ws_message(SoupWebsocketConnection *conn, SoupWebsocketDataType type, GBytes *message, gpointer user_data)
+{
+    if (!app_state.webrtc)
+        return;
 
     gsize size;
     const gchar *data = g_bytes_get_data(message, &size);
 
     JsonParser *parser = json_parser_new();
-    if (json_parser_load_from_data(parser, data, size, NULL)) {
+    if (json_parser_load_from_data(parser, data, size, NULL))
+    {
         JsonObject *root = json_node_get_object(json_parser_get_root(parser));
-        
-        if (json_object_has_member(root, "sdp")) {
+
+        if (json_object_has_member(root, "sdp"))
+        {
             JsonObject *sdp = json_object_get_object_member(root, "sdp");
             const gchar *sdp_str = json_object_get_string_member(sdp, "sdp");
             g_print("[Signaling] Received SDP Offer from browser\n");
             on_offer_received(sdp_str);
-        } else if (json_object_has_member(root, "ice")) {
+        }
+        else if (json_object_has_member(root, "ice"))
+        {
             JsonObject *ice = json_object_get_object_member(root, "ice");
             const gchar *candidate = json_object_get_string_member(ice, "candidate");
             guint mline_index = json_object_get_int_member(ice, "sdpMLineIndex");
@@ -106,7 +120,9 @@ static void on_ws_message(SoupWebsocketConnection *conn, SoupWebsocketDataType t
     g_object_unref(parser);
 }
 
-static void on_ws_opened(SoupServer *server, SoupWebsocketConnection *conn, const char *path, SoupClientContext *client, gpointer user_data) {
+// Fixed: SoupServerMessage* replaces SoupClientContext* for libsoup-3.0 compatibility
+static void on_ws_opened(SoupServer *server, SoupWebsocketConnection *conn, const char *path, SoupServerMessage *msg, gpointer user_data)
+{
     g_print("[Signaling] Browser connected via WebSocket\n");
     app_state.ws = conn;
     g_signal_connect(conn, "message", G_CALLBACK(on_ws_message), NULL);
@@ -126,7 +142,8 @@ static void on_ws_opened(SoupServer *server, SoupWebsocketConnection *conn, cons
     app_state.pipeline = gst_parse_launch(pipeline_str, &error);
     g_free(pipeline_str);
 
-    if (error) {
+    if (error)
+    {
         g_printerr("Pipeline launch failed: %s\n", error->message);
         g_clear_error(&error);
         return;
@@ -139,8 +156,9 @@ static void on_ws_opened(SoupServer *server, SoupWebsocketConnection *conn, cons
 
     GstPad *srcpad = gst_element_get_static_pad(queue, "src");
     GstPad *sinkpad = gst_element_request_pad_simple(app_state.webrtc, "sink_%u");
-    
-    if (gst_pad_link(srcpad, sinkpad) == GST_PAD_LINK_OK) {
+
+    if (gst_pad_link(srcpad, sinkpad) == GST_PAD_LINK_OK)
+    {
         g_print("[GStreamer] Successfully linked videoqueue to webrtcbin sink pad\n");
     }
 
@@ -151,12 +169,13 @@ static void on_ws_opened(SoupServer *server, SoupWebsocketConnection *conn, cons
     gst_element_set_state(app_state.pipeline, GST_STATE_PLAYING);
 }
 
-int main(int argc, char *argv[]) {
+int main(int argc, char *argv[])
+{
     gst_init(&argc, &argv);
 
     SoupServer *server = soup_server_new("server-header", "webrtc-server", NULL);
     soup_server_add_websocket_handler(server, "/ws", NULL, NULL, on_ws_opened, NULL, NULL);
-    
+
     soup_server_listen_all(server, 8080, 0, NULL);
     g_print("WebRTC Server running on http://0.0.0.0:8080/\n");
 
