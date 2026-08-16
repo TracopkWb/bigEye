@@ -242,7 +242,7 @@ static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char 
         g_clear_error(&error);
         return;
     }
-    
+
     // --- START OF STEP 2 CODE ---
     GstElement *webrtc = gst_bin_get_by_name(GST_BIN(app_state.pipeline), "sendrecv");
     GstElement *queue = gst_bin_get_by_name(GST_BIN(app_state.pipeline), "videoqueue");
