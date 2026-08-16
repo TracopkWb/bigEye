@@ -174,7 +174,8 @@ static void on_http_request(SoupServer *server, SoupServerMessage *msg, const ch
         gchar *contents = NULL;
         gsize length = 0;
 
-        if (g_file_get_contents("index.html", &contents, &length, NULL))
+        // Path updated to read from the public/ directory
+        if (g_file_get_contents("public/index.html", &contents, &length, NULL))
         {
             SoupMessageHeaders *headers = soup_server_message_get_response_headers(msg);
             soup_message_headers_set_content_type(headers, "text/html", NULL);
@@ -183,6 +184,7 @@ static void on_http_request(SoupServer *server, SoupServerMessage *msg, const ch
         }
         else
         {
+            g_printerr("[HTTP Error] Could not find file at 'public/index.html'\n");
             soup_server_message_set_status(msg, SOUP_STATUS_NOT_FOUND, NULL);
         }
     }
