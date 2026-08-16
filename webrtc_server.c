@@ -23,12 +23,12 @@ static void on_ice_candidate(GstElement *webrtc, guint mline_index, gchar *candi
         return;
 
     JsonBuilder *builder = json_builder_new();
-    json_builder_start_object(builder);
+    json_builder_begin_object(builder); // Fixed function call
     json_builder_set_member_name(builder, "type");
     json_builder_add_string_value(builder, "candidate");
 
     json_builder_set_member_name(builder, "candidate");
-    json_builder_start_object(builder);
+    json_builder_begin_object(builder); // Fixed function call
     json_builder_set_member_name(builder, "candidate");
     json_builder_add_string_value(builder, candidate);
     json_builder_set_member_name(builder, "sdpMLineIndex");
@@ -65,11 +65,10 @@ static void on_answer_created(GstPromise *promise, gpointer user_data)
 
     g_print("[Signaling] SDP Answer generated and local description set\n");
 
-    // Convert SDP Answer to text and send to browser via WebSocket
     gchar *sdp_string = gst_sdp_message_as_text(answer->sdp);
 
     JsonBuilder *builder = json_builder_new();
-    json_builder_start_object(builder);
+    json_builder_begin_object(builder); // Fixed function call
     json_builder_set_member_name(builder, "type");
     json_builder_add_string_value(builder, "answer");
     json_builder_set_member_name(builder, "sdp");
