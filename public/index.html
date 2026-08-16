@@ -43,20 +43,16 @@
 
       // Listen for incoming media track from GStreamer
       pc.ontrack = (event) => {
-        console.log("[WebRTC] Received remote track:", event.track.kind);
-        statusDiv.innerText = "Stream Live";
+        const video = document.getElementById("video");
 
         if (event.streams && event.streams[0]) {
-          videoElem.srcObject = event.streams[0];
+          video.srcObject = event.streams[0];
         } else {
-          videoElem.srcObject = new MediaStream([event.track]);
+          video.srcObject = new MediaStream([event.track]);
         }
 
-        videoElem.play().catch((err) => {
-          console.warn("[WebRTC] Autoplay blocked, playing muted:", err);
-          videoElem.muted = true;
-          videoElem.play();
-        });
+        // Force play in case browser policy pauses it
+        video.play().catch((err) => console.error("Autoplay error:", err));
       };
 
       // Send browser ICE candidates back to C server
