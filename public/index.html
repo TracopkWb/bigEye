@@ -82,7 +82,9 @@
       };
 
       ws.onopen = async () => {
-        // Force WebRTC direction to recvonly
+        status.innerText = "Connected. Initializing WebRTC...";
+
+        // Instruct browser to request incoming video track
         pc.addTransceiver("video", { direction: "recvonly" });
 
         const offer = await pc.createOffer();
@@ -95,7 +97,6 @@
           }),
         );
       };
-
       ws.onmessage = async (msg) => {
         const data = JSON.parse(msg.data);
 
