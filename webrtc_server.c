@@ -50,7 +50,6 @@ static void on_answer_created(GstPromise *promise, gpointer user_data)
     GstWebRTCSessionDescription *answer = NULL;
     const GstStructure *reply = gst_promise_get_reply(promise);
 
-    // Fixed: Using GST_TYPE_WEBRTC_SESSION_DESCRIPTION for GLib type checking
     gst_structure_get(reply, "answer", GST_TYPE_WEBRTC_SESSION_DESCRIPTION, &answer, NULL);
     gst_promise_unref(promise);
 
@@ -170,27 +169,21 @@ static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char 
 
 static void on_http_request(SoupServer *server, SoupServerMessage *msg, const char *path, GHashTable *query, gpointer user_data)
 {
-    if (g_strcmp0(path, "/") == 0 || g_strcmp0(path, "public/index.html") == 0)
+    if (g_strcmp0(path, "/") == 0 || g_strcmp0(path, "/index.html") == 0)
     {
-        GError *error = NULL;
         gchar *contents = NULL;
         gsize length = 0;
 
-        if (g_file_get_contents("index.html", &contents, &length, &error))
+        if (g_file_get_contents("index.html", &contents, &length, NULL))
         {
             SoupMessageHeaders *headers = soup_server_message_get_response_headers(msg);
             soup_message_headers_set_content_type(headers, "text/html", NULL);
-
-            GBytes *body = g_bytes_new_take(contents, length);
             soup_server_message_set_response(msg, "text/html", SOUP_MEMORY_TAKE, contents, length);
-            g_bytes_unref(body);
             soup_server_message_set_status(msg, SOUP_STATUS_OK, NULL);
         }
         else
         {
             soup_server_message_set_status(msg, SOUP_STATUS_NOT_FOUND, NULL);
-            if (error)
-                g_clear_error(&error);
         }
     }
     else
@@ -205,10 +198,8 @@ int main(int argc, char *argv[])
 
     SoupServer *server = soup_server_new("server-header", "webrtc-server", NULL);
 
-    // Register HTTP static file handler
-    soup_server_add_handler(server, NULL, on_http_request, NULL, NULL);
-
-    // Register WebSocket handler
+    // Explicitly scope HTTP serving to "/" so it never touches "/ws"
+    soup_server_add_handler(server, "/", on_http_request, NULL, NULL);
     soup_server_add_websocket_handler(server, "/ws", NULL, NULL, on_ws_opened, NULL, NULL);
 
     soup_server_listen_all(server, 8080, 0, NULL);
