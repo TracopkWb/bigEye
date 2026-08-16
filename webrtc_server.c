@@ -279,9 +279,9 @@ static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char 
         "webrtcbin name=sendrecv stun-server=stun://stun.l.google.com:19302 "
         "rtspsrc name=rtspsrc location=" RTSP_URL " protocols=udp latency=500 drop-on-latency=true "
         "rtph264depay name=depay ! queue leaky=downstream max-size-buffers=10 ! "
-        "h264parse ! "
-        "rtph264pay config-interval=1 ! "
-        "capsfilter caps=\"application/x-rtp,media=video,clock-rate=90000,encoding-name=H264\" ! "
+        "h264parse config-interval=-1 ! "
+        "rtph264pay config-interval=1 aggregate-mode=zero-latency ! "
+        "capsfilter caps=\"application/x-rtp,media=video,clock-rate=90000,encoding-name=H264,packetization-mode=1\" ! "
         "queue name=videoqueue");
 
     app_state.pipeline = gst_parse_launch(pipeline_str, &error);
