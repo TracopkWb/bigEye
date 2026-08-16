@@ -93,11 +93,16 @@
         const data = JSON.parse(msg.data);
 
         if (data.type === "answer") {
-          console.log("[Signaling] Received Answer SDP from server");
+          console.log("[Signaling] SDP Answer received from server");
           await pc.setRemoteDescription(new RTCSessionDescription(data));
-          statusDiv.innerText = "Negotiation complete. Receiving stream...";
+          statusDiv.innerText = "SDP Handshake Complete. Gathering ICE...";
         } else if (data.type === "candidate" && data.candidate) {
-          await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+            console.log("[ICE] Server candidate added successfully");
+          } catch (e) {
+            console.error("[ICE] Error adding candidate:", e);
+          }
         }
       };
 

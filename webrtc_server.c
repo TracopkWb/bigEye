@@ -207,78 +207,49 @@ static void on_ws_message(SoupWebsocketConnection *ws, gint type, GBytes *messag
     g_object_unref(parser);
 }
 
-static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char *path, SoupWebsocketConnection *connection, gpointer user_data)
+static void on_ws_message(SoupWebsocketConnection *conn, SoupWebsocketDataType type, GBytes *message, gpointer user_data)
 {
-    g_print("[Signaling] Browser connected via WebSocket\n");
-    app_state.ws = connection;
-    g_object_ref(connection);
+    gsize size;
+    const gchar *data = g_bytes_get_data(message, &size);
 
-    g_signal_connect(connection, "message", G_CALLBACK(on_ws_message), NULL);
-
-    if (app_state.pipeline)
+    JsonParser *parser = json_parser_new();
+    if (!json_parser_load_from_data(parser, data, size, NULL))
     {
-        gst_element_set_state(app_state.pipeline, GST_STATE_NULL);
-        gst_object_unref(app_state.pipeline);
-        app_state.pipeline = NULL;
-        app_state.webrtc = NULL;
-    }
-
-    gchar *pipeline_str = g_strdup_printf(
-        "webrtcbin name=sendrecv stun-server=stun://stun.l.google.com:19302 "
-        "rtspsrc name=rtspsrc location=" RTSP_URL " protocols=tcp+udp latency=300 timeout=5000000 "
-        "rtph264depay name=depay ! h264parse config-interval=1 ! "
-        "video/x-h264,stream-format=byte-stream,alignment=au ! "
-        "rtph264pay config-interval=1 pt=96 aggregate-mode=zero-latency ! "
-        "application/x-rtp,media=video,clock-rate=90000,encoding-name=H264,payload=96 ! "
-        "queue name=videoqueue");
-
-    GError *error = NULL;
-    app_state.pipeline = gst_parse_launch(pipeline_str, &error);
-    g_free(pipeline_str);
-
-    if (error)
-    {
-        g_printerr("[GStreamer Error] %s\n", error->message);
-        g_error_free(error);
+        g_object_unref(parser);
         return;
     }
 
-    GstBus *bus = gst_element_get_bus(app_state.pipeline);
-    gst_bus_add_watch(bus, on_bus_message, NULL);
-    gst_object_unref(bus);
+    JsonObject *root = json_node_get_object(json_parser_get_root(parser));
+    const gchar *msg_type = json_object_get_string_member(root, "type");
 
-    app_state.webrtc = gst_bin_get_by_name(GST_BIN(app_state.pipeline), "sendrecv");
-    GstElement *rtspsrc = gst_bin_get_by_name(GST_BIN(app_state.pipeline), "rtspsrc");
-    GstElement *depay = gst_bin_get_by_name(GST_BIN(app_state.pipeline), "depay");
-    GstElement *videoqueue = gst_bin_get_by_name(GST_BIN(app_state.pipeline), "videoqueue");
-
-    if (rtspsrc && depay)
+    if (g_strcmp0(msg_type, "offer") == 0)
     {
-        g_signal_connect(rtspsrc, "pad-added", G_CALLBACK(on_rtspsrc_pad_added), depay);
-        gst_object_unref(rtspsrc);
-        gst_object_unref(depay);
+        const gchar *sdp_str = json_object_get_string_member(root, "sdp");
+        GstSDPMessage *sdp;
+        gst_sdp_message_new(&sdp);
+        gst_sdp_message_parse_buffer((guint8 *)sdp_str, strlen(sdp_str), sdp);
+
+        GstWebRTCSessionDescription *remote_desc = gst_webrtc_session_description_new(GST_WEBRTC_SDP_TYPE_OFFER, sdp);
+        g_signal_emit_by_name(app_state.webrtc, "set-remote-description", remote_desc, NULL);
+        gst_webrtc_session_description_free(remote_desc);
+
+        // Generate Answer
+        GstPromise *promise = gst_promise_new_with_change_func(on_answer_created, NULL, NULL);
+        g_signal_emit_by_name(app_state.webrtc, "create-answer", NULL, promise);
+    }
+    else if (g_strcmp0(msg_type, "candidate") == 0)
+    {
+        // RECEIVE CANDIDATE FROM BROWSER AND ADD TO WEBRTCBIN
+        JsonObject *cand_obj = json_object_get_object_member(root, "candidate");
+        const gchar *candidate_str = json_object_get_string_member(cand_obj, "candidate");
+        guint mlineindex = json_object_get_int_member(cand_obj, "sdpMLineIndex");
+
+        g_signal_emit_by_name(app_state.webrtc, "add-ice-candidate", mlineindex, candidate_str);
+        g_print("[ICE] Added browser candidate (mline %u)\n", mlineindex);
     }
 
-    // Connect videoqueue directly into a dynamic webrtcbin sink pad
-    if (videoqueue && app_state.webrtc)
-    {
-        GstPad *srcpad = gst_element_get_static_pad(videoqueue, "src");
-        GstPad *sinkpad = gst_element_request_pad_simple(app_state.webrtc, "sink_%u");
-        if (srcpad && sinkpad)
-        {
-            if (gst_pad_link(srcpad, sinkpad) == GST_PAD_LINK_OK)
-            {
-                g_print("[GStreamer] Linked videoqueue to webrtcbin sink pad\n");
-            }
-            gst_object_unref(srcpad);
-            gst_object_unref(sinkpad);
-        }
-        gst_object_unref(videoqueue);
-    }
-
-    g_signal_connect(app_state.webrtc, "on-ice-candidate", G_CALLBACK(on_ice_candidate), NULL);
-
-    gst_element_set_state(app_state.pipeline, GST_STATE_PLAYING);
+    g_object_ref_sink(parser);
+    g_object_unref(parser);
 }
 
 static void http_handler(SoupServer *server, SoupServerMessage *msg, const char *path, GHashTable *query, gpointer user_data)
