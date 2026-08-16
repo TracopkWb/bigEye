@@ -251,7 +251,7 @@ static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char 
 // HTTP handler to serve index.html directly
 static void on_http_request(SoupServer *server, SoupServerMessage *msg, const char *path, GHashTable *query, gpointer user_data) {
     if (g_strcmp0(path, "/") == 0) {
-        GMappedFile *file = g_mapped_file_new("index.html", FALSE, NULL);
+        GMappedFile *file = g_mapped_file_new("public/index.html", FALSE, NULL);
         if (file) {
             GBytes *bytes = g_mapped_file_get_bytes(file);
             soup_server_message_set_response(msg, "text/html", SOUP_MEMORY_COPY,
