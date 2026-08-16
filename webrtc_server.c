@@ -27,6 +27,35 @@ static void send_ws_json(SoupWebsocketConnection *ws, JsonNode *root_node) {
     g_object_unref(gen);
 }
 
+// Dynamically link RTSP video stream to depayloader
+static void on_rtspsrc_pad_added(GstElement *src, GstPad *new_pad, gpointer user_data) {
+    GstElement *depay = GST_ELEMENT(user_data);
+    GstPad *sink_pad = gst_element_get_static_pad(depay, "sink");
+
+    if (!sink_pad) return;
+
+    if (gst_pad_is_linked(sink_pad)) {
+        gst_object_unref(sink_pad);
+        return;
+    }
+
+    GstCaps *caps = gst_pad_query_caps(new_pad, NULL);
+    if (caps) {
+        GstStructure *str = gst_caps_get_structure(caps, 0);
+        const gchar *media_type = gst_structure_get_string(str, "media");
+
+        if (g_strcmp0(media_type, "video") == 0) {
+            if (gst_pad_link(new_pad, sink_pad) == GST_PAD_LINK_OK) {
+                g_print("[GStreamer] RTSP Video stream successfully linked\n");
+            } else {
+                g_printerr("[GStreamer Error] Failed to link RTSP video pad\n");
+            }
+        }
+        gst_caps_unref(caps);
+    }
+    gst_object_unref(sink_pad);
+}
+
 // Callback when GStreamer creates an Answer
 static void on_answer_created(GstPromise *promise, gpointer user_data) {
     if (!app_state.webrtc || !app_state.ws) return;
@@ -149,13 +178,13 @@ static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char 
         app_state.webrtc = NULL;
     }
 
-    // Explicitly link rtph264pay to sendrecv.sink_0
+    // Explicitly set RTP caps filter to allow webrtcbin to request dynamic sink pad correctly
     GError *error = NULL;
     gchar *pipeline_str = g_strdup_printf(
         "webrtcbin name=sendrecv stun-server=stun://stun.l.google.com:19302 "
-        "rtspsrc location=" RTSP_URL " protocols=udp buffer-mode=0 latency=100 ! "
-        "rtph264depay ! h264parse ! rtph264pay config-interval=1 pt=96 ! "
-        "sendrecv.sink_0"
+        "rtspsrc name=rtspsrc location=" RTSP_URL " protocols=udp buffer-mode=0 latency=100 "
+        "rtph264depay name=depay ! h264parse ! rtph264pay config-interval=1 pt=96 ! "
+        "application/x-rtp,media=video,encoding-name=H264,payload=96 ! sendrecv."
     );
 
     app_state.pipeline = gst_parse_launch(pipeline_str, &error);
@@ -168,9 +197,18 @@ static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char 
     }
 
     app_state.webrtc = gst_bin_get_by_name(GST_BIN(app_state.pipeline), "sendrecv");
+    GstElement *rtspsrc = gst_bin_get_by_name(GST_BIN(app_state.pipeline), "rtspsrc");
+    GstElement *depay = gst_bin_get_by_name(GST_BIN(app_state.pipeline), "depay");
+
     if (!app_state.webrtc) {
         g_printerr("[GStreamer Error] Failed to retrieve sendrecv element\n");
         return;
+    }
+
+    if (rtspsrc && depay) {
+        g_signal_connect(rtspsrc, "pad-added", G_CALLBACK(on_rtspsrc_pad_added), depay);
+        gst_object_unref(rtspsrc);
+        gst_object_unref(depay);
     }
 
     g_signal_connect(app_state.webrtc, "on-ice-candidate", G_CALLBACK(on_ice_candidate), NULL);
