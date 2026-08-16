@@ -155,7 +155,7 @@ static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char 
 
 // HTTP callback to serve index.html directly from C
 static void http_handler(SoupServer *server, SoupServerMessage *msg, const char *path, GHashTable *query, gpointer user_data) {
-    if (g_strcmp0(path, "/") != 0) {
+    if (g_strcmp0(path, "/public/index.html") != 0) {
         soup_server_message_set_status(msg, SOUP_STATUS_NOT_FOUND, NULL);
         return;
     }
@@ -187,8 +187,8 @@ int main(int argc, char *argv[]) {
     // SoupServer *server = soup_server_new(SOUP_SERVER_SERVER_HEADER, "webrtc-c-server", NULL);
     SoupServer *server = soup_server_new(NULL, NULL);
     
-    // Serve HTML static file on /
-    soup_server_add_handler(server, "/", http_handler, NULL, NULL);
+    // Serve HTML static file on /public/
+    soup_server_add_handler(server, "/public/index.html", http_handler, NULL, NULL);
 
     // Serve WebSockets on /ws
     soup_server_add_websocket_handler(server, "/ws", NULL, NULL, on_ws_opened, NULL, NULL);
