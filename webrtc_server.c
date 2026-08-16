@@ -39,7 +39,11 @@ static void on_rtspsrc_pad_added(GstElement *src, GstPad *new_pad, gpointer user
         return;
     }
 
-    GstCaps *caps = gst_pad_query_caps(new_pad, NULL);
+    GstCaps *caps = gst_pad_get_current_caps(new_pad);
+    if (!caps) {
+        caps = gst_pad_query_caps(new_pad, NULL);
+    }
+
     if (caps) {
         GstStructure *str = gst_caps_get_structure(caps, 0);
         const gchar *media_type = gst_structure_get_string(str, "media");
@@ -48,7 +52,7 @@ static void on_rtspsrc_pad_added(GstElement *src, GstPad *new_pad, gpointer user
             if (gst_pad_link(new_pad, sink_pad) == GST_PAD_LINK_OK) {
                 g_print("[GStreamer] RTSP Video stream successfully linked\n");
             } else {
-                g_printerr("[GStreamer Error] Failed to link RTSP video pad\n");
+                g_printerr("[GStreamer Error] Failed to link RTSP video pad to depayloader\n");
             }
         }
         gst_caps_unref(caps);
@@ -178,13 +182,15 @@ static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char 
         app_state.webrtc = NULL;
     }
 
-    // Explicitly set RTP caps filter to allow webrtcbin to request dynamic sink pad correctly
+    // Corrected pipeline string with full clock-rate caps and thread queue
     GError *error = NULL;
     gchar *pipeline_str = g_strdup_printf(
         "webrtcbin name=sendrecv stun-server=stun://stun.l.google.com:19302 "
         "rtspsrc name=rtspsrc location=" RTSP_URL " protocols=udp buffer-mode=0 latency=100 "
-        "rtph264depay name=depay ! h264parse ! rtph264pay config-interval=1 pt=96 ! "
-        "application/x-rtp,media=video,encoding-name=H264,payload=96 ! sendrecv."
+        "rtph264depay name=depay ! h264parse ! "
+        "rtph264pay config-interval=1 pt=96 ! "
+        "application/x-rtp,media=video,clock-rate=90000,encoding-name=H264,payload=96 ! "
+        "queue ! sendrecv."
     );
 
     app_state.pipeline = gst_parse_launch(pipeline_str, &error);
