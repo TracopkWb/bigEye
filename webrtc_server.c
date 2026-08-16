@@ -223,7 +223,6 @@ static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char 
         app_state.webrtc = NULL;
     }
 
-    // Pipeline with named elements for dynamic pad linking
     gchar *pipeline_str = g_strdup_printf(
         "webrtcbin name=sendrecv stun-server=stun://stun.l.google.com:19302 "
         "rtspsrc name=rtspsrc location=" RTSP_URL " protocols=tcp+udp latency=300 timeout=5000000 "
@@ -231,7 +230,7 @@ static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char 
         "video/x-h264,stream-format=byte-stream,alignment=au ! "
         "rtph264pay config-interval=1 pt=96 aggregate-mode=zero-latency ! "
         "application/x-rtp,media=video,clock-rate=90000,encoding-name=H264,payload=96 ! "
-        "queue name=videoqueue ! sendrecv.");
+        "queue name=videoqueue");
 
     GError *error = NULL;
     app_state.pipeline = gst_parse_launch(pipeline_str, &error);
@@ -251,8 +250,8 @@ static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char 
     app_state.webrtc = gst_bin_get_by_name(GST_BIN(app_state.pipeline), "sendrecv");
     GstElement *rtspsrc = gst_bin_get_by_name(GST_BIN(app_state.pipeline), "rtspsrc");
     GstElement *depay = gst_bin_get_by_name(GST_BIN(app_state.pipeline), "depay");
+    GstElement *videoqueue = gst_bin_get_by_name(GST_BIN(app_state.pipeline), "videoqueue");
 
-    // Dynamic pad binding: links rtspsrc pad to depay when RTSP stream opens
     if (rtspsrc && depay)
     {
         g_signal_connect(rtspsrc, "pad-added", G_CALLBACK(on_rtspsrc_pad_added), depay);
@@ -260,10 +259,28 @@ static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char 
         gst_object_unref(depay);
     }
 
+    // Connect videoqueue directly into a dynamic webrtcbin sink pad
+    if (videoqueue && app_state.webrtc)
+    {
+        GstPad *srcpad = gst_element_get_static_pad(videoqueue, "src");
+        GstPad *sinkpad = gst_element_request_pad_simple(app_state.webrtc, "sink_%u");
+        if (srcpad && sinkpad)
+        {
+            if (gst_pad_link(srcpad, sinkpad) == GST_PAD_LINK_OK)
+            {
+                g_print("[GStreamer] Linked videoqueue to webrtcbin sink pad\n");
+            }
+            gst_object_unref(srcpad);
+            gst_object_unref(sinkpad);
+        }
+        gst_object_unref(videoqueue);
+    }
+
     g_signal_connect(app_state.webrtc, "on-ice-candidate", G_CALLBACK(on_ice_candidate), NULL);
 
     gst_element_set_state(app_state.pipeline, GST_STATE_PLAYING);
 }
+
 static void http_handler(SoupServer *server, SoupServerMessage *msg, const char *path, GHashTable *query, gpointer user_data)
 {
     gchar *contents = NULL;
