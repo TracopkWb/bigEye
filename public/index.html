@@ -28,7 +28,6 @@
   </head>
   <body>
     <h2>bigEye Live Stream</h2>
-    <!-- Video element MUST contain muted, autoplay, and playsinline -->
     <video id="remoteVideo" autoplay playsinline muted></video>
     <div id="status">Connecting...</div>
 
@@ -41,18 +40,28 @@
         iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
       });
 
+      let candidateQueue = [];
+      let remoteDescriptionSet = false;
+
       // Listen for incoming media track from GStreamer
       pc.ontrack = (event) => {
-        const video = document.getElementById("remoteVideo");
-
         if (event.streams && event.streams[0]) {
-          video.srcObject = event.streams[0];
+          videoElem.srcObject = event.streams[0];
         } else {
-          video.srcObject = new MediaStream([event.track]);
+          videoElem.srcObject = new MediaStream([event.track]);
         }
+        videoElem.play().catch((err) => console.error("Autoplay error:", err));
+      };
 
-        // Force play in case browser policy pauses it
-        video.play().catch((err) => console.error("Autoplay error:", err));
+      // Update UI on WebRTC connection state changes
+      pc.oniceconnectionstatechange = () => {
+        if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
+          statusDiv.innerText = "Stream Live";
+          statusDiv.style.color = "#00e676";
+        } else if (pc.iceConnectionState === "failed" || pc.iceConnectionState === "disconnected") {
+          statusDiv.innerText = "Connection Lost. Reconnecting...";
+          statusDiv.style.color = "#ff5252";
+        }
       };
 
       // Send browser ICE candidates back to C server
@@ -62,16 +71,14 @@
             JSON.stringify({
               type: "candidate",
               candidate: event.candidate,
-            }),
+            })
           );
         }
       };
 
       ws.onopen = async () => {
-        statusDiv.innerText =
-          "WebSocket Connected. Initiating WebRTC Handshake...";
+        statusDiv.innerText = "WebSocket Connected. Initiating WebRTC Handshake...";
 
-        // Force WebRTC to expect incoming video
         pc.addTransceiver("video", { direction: "recvonly" });
 
         const offer = await pc.createOffer();
@@ -81,7 +88,7 @@
           JSON.stringify({
             type: "offer",
             sdp: offer.sdp,
-          }),
+          })
         );
       };
 
@@ -91,13 +98,24 @@
         if (data.type === "answer") {
           console.log("[Signaling] SDP Answer received from server");
           await pc.setRemoteDescription(new RTCSessionDescription(data));
-          statusDiv.innerText = "SDP Handshake Complete. Gathering ICE...";
+          remoteDescriptionSet = true;
+          statusDiv.innerText = "Handshake Complete. Connecting Stream...";
+
+          // Flush buffered candidates
+          while (candidateQueue.length > 0) {
+            const cand = candidateQueue.shift();
+            await pc.addIceCandidate(new RTCIceCandidate(cand));
+          }
         } else if (data.type === "candidate" && data.candidate) {
-          try {
-            await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
-            console.log("[ICE] Server candidate added successfully");
-          } catch (e) {
-            console.error("[ICE] Error adding candidate:", e);
+          if (!remoteDescriptionSet) {
+            candidateQueue.push(data.candidate);
+          } else {
+            try {
+              await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+              console.log("[ICE] Server candidate added successfully");
+            } catch (e) {
+              console.error("[ICE] Error adding candidate:", e);
+            }
           }
         }
       };
