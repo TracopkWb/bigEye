@@ -224,8 +224,8 @@ static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char 
     gchar *pipeline_str = g_strdup_printf(
         "webrtcbin name=sendrecv stun-server=stun://stun.l.google.com:19302 "
         "rtspsrc name=rtspsrc location=\"rtsp://10.0.0.210:554/Streaming/Channels/102\" "
-        "user-id=\"bigEye\" user-pw=\"traHiLook1\" protocols=tcp latency=200 ! "
-        "rtph264depay name=depay ! h264parse ! avdec_h264 ! "
+        "user-id=\"bigEye\" user-pw=\"traHiLook1\" protocols=udp latency=200 ! "
+        "rtph264depay ! h264parse ! avdec_h264 ! "
         "videoconvert ! video/x-raw,format=I420 ! "
         "x264enc speed-preset=ultrafast tune=zerolatency key-int-max=15 ! "
         "video/x-h264,profile=baseline,stream-format=byte-stream,alignment=au ! "
