@@ -163,7 +163,8 @@ int main(int argc, char *argv[]) {
         gst_object_unref(feature);
     }
 
-    SoupServer *server = soup_server_new(SOUP_SERVER_SERVER_HEADER, "webrtc-c-server", NULL);
+    // SoupServer *server = soup_server_new(SOUP_SERVER_SERVER_HEADER, "webrtc-c-server", NULL);
+    SoupServer *server = soup_server_new(NULL, NULL);
     soup_server_add_websocket_handler(server, "/ws", NULL, NULL, on_ws_opened, NULL, NULL);
 
     GError *error = NULL;
