@@ -219,11 +219,3 @@ int main(int argc, char *argv[])
 
     return 0;
 }
-soup_server_listen_all(server, 8080, 0, NULL);
-g_print("WebRTC Server running on http://0.0.0.0:8080/\n");
-
-GMainLoop *loop = g_main_loop_new(NULL, FALSE);
-g_main_loop_run(loop);
-
-return 0;
-}
