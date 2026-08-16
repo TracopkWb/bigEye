@@ -223,11 +223,11 @@ static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char 
         app_state.webrtc = NULL;
     }
 
-    // Direct, validated H.264 WebRTC pipeline
+    // Pipeline with named elements for dynamic pad linking
     gchar *pipeline_str = g_strdup_printf(
         "webrtcbin name=sendrecv stun-server=stun://stun.l.google.com:19302 "
-        "rtspsrc name=rtspsrc location=" RTSP_URL " protocols=tcp latency=200 ! "
-        "rtph264depay ! h264parse config-interval=1 ! "
+        "rtspsrc name=rtspsrc location=" RTSP_URL " protocols=tcp latency=200 "
+        "rtph264depay name=depay ! h264parse config-interval=1 ! "
         "video/x-h264,stream-format=byte-stream,alignment=au ! "
         "rtph264pay config-interval=1 pt=96 aggregate-mode=zero-latency ! "
         "application/x-rtp,media=video,clock-rate=90000,encoding-name=H264,payload=96 ! "
@@ -249,12 +249,21 @@ static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char 
     gst_object_unref(bus);
 
     app_state.webrtc = gst_bin_get_by_name(GST_BIN(app_state.pipeline), "sendrecv");
+    GstElement *rtspsrc = gst_bin_get_by_name(GST_BIN(app_state.pipeline), "rtspsrc");
+    GstElement *depay = gst_bin_get_by_name(GST_BIN(app_state.pipeline), "depay");
+
+    // Dynamic pad binding: links rtspsrc pad to depay when RTSP stream opens
+    if (rtspsrc && depay)
+    {
+        g_signal_connect(rtspsrc, "pad-added", G_CALLBACK(on_rtspsrc_pad_added), depay);
+        gst_object_unref(rtspsrc);
+        gst_object_unref(depay);
+    }
 
     g_signal_connect(app_state.webrtc, "on-ice-candidate", G_CALLBACK(on_ice_candidate), NULL);
 
     gst_element_set_state(app_state.pipeline, GST_STATE_PLAYING);
 }
-
 static void http_handler(SoupServer *server, SoupServerMessage *msg, const char *path, GHashTable *query, gpointer user_data)
 {
     gchar *contents = NULL;
