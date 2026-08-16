@@ -3,96 +3,175 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HiLook IP Camera Live View</title>
+    <title>HiLook Camera Live View</title>
     <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
         body {
-            font-family: Arial, sans-serif;
-            background-color: #121212;
-            color: #ffffff;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #0d1117;
+            color: #c9d1d9;
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
             min-height: 100vh;
-            margin: 0;
+            padding: 20px;
         }
-        .container {
+        .card {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 12px;
+            padding: 24px;
+            width: 100%;
+            max-width: 900px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
             text-align: center;
-            width: 90%;
-            max-width: 960px;
         }
-        .video-box {
+        h1 {
+            font-size: 1.5rem;
+            margin-bottom: 16px;
+            color: #f0f6fc;
+        }
+        .video-container {
             position: relative;
-            background: #000;
+            width: 100%;
+            background-color: #000;
             border-radius: 8px;
             overflow: hidden;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
-            margin-top: 15px;
+            aspect-ratio: 16 / 9;
         }
         video {
             width: 100%;
-            height: auto;
+            height: 100%;
+            object-fit: contain;
             display: block;
         }
-        .status {
-            margin-top: 10px;
-            font-size: 0.95rem;
-            color: #4caf50;
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            margin-top: 16px;
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 0.875rem;
+            font-weight: 500;
+            background-color: #21262d;
+            color: #8b949e;
+        }
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: #d29922;
+            margin-right: 8px;
+        }
+        .status-badge.connected .status-dot {
+            background-color: #3fb950;
+        }
+        .status-badge.error .status-dot {
+            background-color: #f85149;
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h2>HiLook Camera — Live Stream</h2>
-        <div class="video-box">
+    <div class="card">
+        <h1>HiLook Camera — Native C & GStreamer WebRTC</h1>
+        <div class="video-container">
             <video id="remoteVideo" autoplay playsinline muted></video>
         </div>
-        <div class="status" id="statusText">Connecting to server...</div>
+        <div id="statusBadge" class="status-badge">
+            <span class="status-dot"></span>
+            <span id="statusText">Connecting to C WebRTC Server...</span>
+        </div>
     </div>
 
     <script>
+        const video = document.getElementById('remoteVideo');
+        const statusBadge = document.getElementById('statusBadge');
         const statusText = document.getElementById('statusText');
-        const remoteVideo = document.getElementById('remoteVideo');
+
+        function setStatus(text, state) {
+            statusText.innerText = text;
+            statusBadge.className = 'status-badge ' + (state || '');
+        }
+
+        // Dynamically connect to the host serving the web page via WebSocket
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${wsProtocol}//${window.location.host}/ws`;
         
-        const ws = new WebSocket(`ws://${location.host}`);
-        let pc;
+        const ws = new WebSocket(wsUrl);
+        let pc = null;
 
         ws.onopen = async () => {
-            statusText.innerText = "Connected to server. Creating WebRTC offer...";
-            
+            setStatus('WebSocket connected. Initializing WebRTC...', '');
+
             pc = new RTCPeerConnection({
                 iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
             });
 
-            // Expect incoming video track from GStreamer
+            // Tell WebRTC we are expecting an incoming video track from GStreamer
             pc.addTransceiver('video', { direction: 'recvonly' });
 
             pc.ontrack = (event) => {
-                console.log("[WebRTC] Receiving video track!", event.streams);
-                remoteVideo.srcObject = event.streams[0];
-                statusText.innerText = "Live Stream Active (Zero Latency H.264)";
+                if (event.streams && event.streams[0]) {
+                    video.srcObject = event.streams[0];
+                    setStatus('Live Stream Active (Zero Latency Direct H.264)', 'connected');
+                }
             };
 
             pc.onicecandidate = (event) => {
                 if (event.candidate) {
-                    ws.send(JSON.stringify({ type: 'candidate', candidate: event.candidate }));
+                    ws.send(JSON.stringify({
+                        type: 'candidate',
+                        candidate: {
+                            candidate: event.candidate.candidate,
+                            sdpMLineIndex: event.candidate.sdpMLineIndex
+                        }
+                    }));
                 }
             };
 
-            // Create Offer and send to server
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-            ws.send(JSON.stringify({ type: 'offer', sdp: offer.sdp }));
+            try {
+                const offer = await pc.createOffer();
+                await pc.setLocalDescription(offer);
+                ws.send(JSON.stringify({ type: 'offer', sdp: offer.sdp }));
+                setStatus('Offer sent. Waiting for GStreamer Answer...', '');
+            } catch (err) {
+                console.error('Failed to create SDP Offer:', err);
+                setStatus('Error creating WebRTC offer', 'error');
+            }
         };
 
         ws.onmessage = async (event) => {
-            const data = JSON.parse(event.data);
-            if (data.type === 'answer') {
-                console.log("[WebRTC] Received SDP Answer from server");
-                await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: data.sdp }));
-            } else if (data.type === 'candidate') {
-                await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+            try {
+                const data = JSON.parse(event.data);
+
+                if (data.type === 'answer') {
+                    await pc.setRemoteDescription(new RTCSessionDescription({
+                        type: 'answer',
+                        sdp: data.sdp
+                    }));
+                    setStatus('WebRTC Handshake complete. Playing video...', 'connected');
+                } else if (data.type === 'candidate') {
+                    if (data.candidate) {
+                        await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+                    }
+                }
+            } catch (err) {
+                console.error('Error processing message:', err);
             }
+        };
+
+        ws.onclose = () => {
+            setStatus('Disconnected from C Server', 'error');
+        };
+
+        ws.onerror = (err) => {
+            console.error('WebSocket Error:', err);
+            setStatus('WebSocket connection failed', 'error');
         };
     </script>
 </body>

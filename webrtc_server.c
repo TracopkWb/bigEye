@@ -153,6 +153,27 @@ static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char 
     gst_element_set_state(app_state.pipeline, GST_STATE_PLAYING);
 }
 
+// HTTP callback to serve index.html directly from C
+static void http_handler(SoupServer *server, SoupServerMessage *msg, const char *path, GHashTable *query, gpointer user_data) {
+    if (g_strcmp0(path, "/") != 0) {
+        soup_server_message_set_status(msg, SOUP_STATUS_NOT_FOUND, NULL);
+        return;
+    }
+
+    gchar *contents = NULL;
+    gsize length = 0;
+    GError *error = NULL;
+
+    if (g_file_get_contents("index.html", &contents, &length, &error)) {
+        soup_server_message_set_response(msg, "text/html", SOUP_MEMORY_TAKE, contents, length);
+        soup_server_message_set_status(msg, SOUP_STATUS_OK, NULL);
+    } else {
+        g_printerr("Could not load index.html: %s\n", error ? error->message : "File not found");
+        soup_server_message_set_status(msg, SOUP_STATUS_NOT_FOUND, NULL);
+        if (error) g_error_free(error);
+    }
+}
+
 int main(int argc, char *argv[]) {
     gst_init(&argc, &argv);
 
@@ -165,6 +186,11 @@ int main(int argc, char *argv[]) {
 
     // SoupServer *server = soup_server_new(SOUP_SERVER_SERVER_HEADER, "webrtc-c-server", NULL);
     SoupServer *server = soup_server_new(NULL, NULL);
+    
+    // Serve HTML static file on /
+    soup_server_add_handler(server, "/", http_handler, NULL, NULL);
+
+    // Serve WebSockets on /ws
     soup_server_add_websocket_handler(server, "/ws", NULL, NULL, on_ws_opened, NULL, NULL);
 
     GError *error = NULL;

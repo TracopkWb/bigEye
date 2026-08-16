@@ -6,7 +6,9 @@ const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
+
+// Connects dynamically to the same host & port serving the HTML page
+const ws = new WebSocket(`ws://${location.host}/ws`);
 
 app.use(express.static(path.join(__dirname, 'public')));
 
