@@ -230,7 +230,7 @@ static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char 
         "h264parse config-interval=1 ! "
         "rtph264pay config-interval=1 pt=96 aggregate-mode=zero-latency ! "
         "capsfilter caps=\"application/x-rtp,media=video,clock-rate=90000,encoding-name=H264,payload=96\" ! "
-        "queue name=videoqueue");
+        "queue name=videoqueue ! sendrecv.");
 
     GError *error = NULL;
     app_state.pipeline = gst_parse_launch(pipeline_str, &error);
@@ -250,7 +250,6 @@ static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char 
     app_state.webrtc = gst_bin_get_by_name(GST_BIN(app_state.pipeline), "sendrecv");
     GstElement *rtspsrc = gst_bin_get_by_name(GST_BIN(app_state.pipeline), "rtspsrc");
     GstElement *depay = gst_bin_get_by_name(GST_BIN(app_state.pipeline), "depay");
-    GstElement *videoqueue = gst_bin_get_by_name(GST_BIN(app_state.pipeline), "videoqueue");
 
     if (rtspsrc && depay)
     {
@@ -258,27 +257,6 @@ static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char 
         gst_object_unref(rtspsrc);
         gst_object_unref(depay);
     }
-
-    GstCaps *caps = gst_caps_new_simple("application/x-rtp",
-                                        "media", G_TYPE_STRING, "video",
-                                        "clock-rate", G_TYPE_INT, 90000,
-                                        "encoding-name", G_TYPE_STRING, "H264",
-                                        NULL);
-    GstWebRTCRTPTransceiver *trans = NULL;
-    g_signal_emit_by_name(app_state.webrtc, "add-transceiver", GST_WEBRTC_RTP_TRANSCEIVER_DIRECTION_SENDONLY, caps, &trans);
-    if (trans)
-        gst_object_unref(trans);
-    gst_caps_unref(caps);
-
-    GstPad *srcpad = gst_element_get_static_pad(videoqueue, "src");
-    GstPad *sinkpad = gst_element_request_pad_simple(app_state.webrtc, "sink_%u");
-    if (srcpad && sinkpad)
-    {
-        gst_pad_link(srcpad, sinkpad);
-        gst_object_unref(srcpad);
-        gst_object_unref(sinkpad);
-    }
-    gst_object_unref(videoqueue);
 
     g_signal_connect(app_state.webrtc, "on-ice-candidate", G_CALLBACK(on_ice_candidate), NULL);
 
