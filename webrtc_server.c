@@ -65,7 +65,7 @@ static void on_answer_created(GstPromise *promise, gpointer user_data)
     json_object_set_string_member(sdp, "sdp", sdp_text);
     json_object_set_object_member(root, "sdp", sdp);
 
-    g_print("[Signaling] SDP Answer generated and sent\n");
+    g_print("[Signaling] SDP Answer generated and sent to browser\n");
     send_signaling_json(root);
 
     g_free(sdp_text);
@@ -119,9 +119,24 @@ static void on_ws_message(SoupWebsocketConnection *conn, SoupWebsocketDataType t
     g_object_unref(parser);
 }
 
+static void stop_pipeline(void)
+{
+    if (app_state.pipeline)
+    {
+        gst_element_set_state(app_state.pipeline, GST_STATE_NULL);
+        gst_object_unref(app_state.pipeline);
+        app_state.pipeline = NULL;
+        app_state.webrtc = NULL;
+    }
+}
+
 static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char *path, SoupWebsocketConnection *conn, gpointer user_data)
 {
     g_print("[Signaling] Browser connected via WebSocket\n");
+
+    // Stop any existing session
+    stop_pipeline();
+
     app_state.ws = conn;
     g_signal_connect(conn, "message", G_CALLBACK(on_ws_message), NULL);
 
@@ -174,7 +189,6 @@ static void on_http_request(SoupServer *server, SoupServerMessage *msg, const ch
         gchar *contents = NULL;
         gsize length = 0;
 
-        // Path updated to read from the public/ directory
         if (g_file_get_contents("public/index.html", &contents, &length, NULL))
         {
             SoupMessageHeaders *headers = soup_server_message_get_response_headers(msg);
@@ -200,7 +214,6 @@ int main(int argc, char *argv[])
 
     SoupServer *server = soup_server_new("server-header", "webrtc-server", NULL);
 
-    // Explicitly scope HTTP serving to "/" so it never touches "/ws"
     soup_server_add_handler(server, "/", on_http_request, NULL, NULL);
     soup_server_add_websocket_handler(server, "/ws", NULL, NULL, on_ws_opened, NULL, NULL);
 
