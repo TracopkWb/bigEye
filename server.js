@@ -1,23 +1,38 @@
 const express = require('express');
-const WebSocket = require('ws');
 const http = require('http');
+const WebSocket = require('ws');
+const path = require('path');
 
 const app = express();
-app.use(express.static(__dirname));
-
 const server = http.createServer(app);
+
+// Initialize the WebSocket Server instance correctly
 const wss = new WebSocket.Server({ server });
 
+app.use(express.static(path.join(__dirname, 'public')));
+
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
 wss.on('connection', (ws) => {
-    console.log('[Signaling] Client connected via WebSocket');
+    console.log('[Signaling] Browser connected via WebSocket');
 
     ws.on('message', (message) => {
-        const data = JSON.parse(message);
-        // Standard JS object parsing instead of json-glib structures
-        console.log('[Signaling] Received:', data.type);
+        try {
+            const data = JSON.parse(message);
+            console.log('[Signaling] Received from browser:', data.type);
+        } catch (err) {
+            console.error('[Error] Parsing WS message:', err);
+        }
+    });
+
+    ws.on('close', () => {
+        console.log('[Signaling] Client disconnected');
     });
 });
 
-server.listen(8080, () => {
-    console.log('Node.js WebRTC server running on http://localhost:8080');
+const PORT = 1234;
+server.listen(PORT, () => {
+    console.log(`Server running at http://localhost:${PORT}`);
 });
