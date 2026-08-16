@@ -50,9 +50,9 @@ static void on_rtspsrc_pad_added(GstElement *src, GstPad *new_pad, gpointer user
 
         if (g_strcmp0(media_type, "video") == 0) {
             if (gst_pad_link(new_pad, sink_pad) == GST_PAD_LINK_OK) {
-                g_print("[GStreamer] RTSP Video stream successfully linked\n");
+                g_print("[GStreamer] RTSP video pad linked successfully\n");
             } else {
-                g_printerr("[GStreamer Error] Failed to link RTSP video pad to depayloader\n");
+                g_printerr("[GStreamer Error] Failed to link RTSP video pad\n");
             }
         }
         gst_caps_unref(caps);
@@ -182,7 +182,7 @@ static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char 
         app_state.webrtc = NULL;
     }
 
-    // Corrected pipeline string with full clock-rate caps and thread queue
+    // Build pipeline up to named queue
     GError *error = NULL;
     gchar *pipeline_str = g_strdup_printf(
         "webrtcbin name=sendrecv stun-server=stun://stun.l.google.com:19302 "
@@ -190,7 +190,7 @@ static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char 
         "rtph264depay name=depay ! h264parse ! "
         "rtph264pay config-interval=1 pt=96 ! "
         "application/x-rtp,media=video,clock-rate=90000,encoding-name=H264,payload=96 ! "
-        "queue ! sendrecv."
+        "queue name=videoqueue"
     );
 
     app_state.pipeline = gst_parse_launch(pipeline_str, &error);
@@ -205,17 +205,33 @@ static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char 
     app_state.webrtc = gst_bin_get_by_name(GST_BIN(app_state.pipeline), "sendrecv");
     GstElement *rtspsrc = gst_bin_get_by_name(GST_BIN(app_state.pipeline), "rtspsrc");
     GstElement *depay = gst_bin_get_by_name(GST_BIN(app_state.pipeline), "depay");
+    GstElement *videoqueue = gst_bin_get_by_name(GST_BIN(app_state.pipeline), "videoqueue");
 
-    if (!app_state.webrtc) {
-        g_printerr("[GStreamer Error] Failed to retrieve sendrecv element\n");
+    if (!app_state.webrtc || !videoqueue) {
+        g_printerr("[GStreamer Error] Failed to retrieve required elements\n");
         return;
     }
 
+    // Connect RTSP video pad
     if (rtspsrc && depay) {
         g_signal_connect(rtspsrc, "pad-added", G_CALLBACK(on_rtspsrc_pad_added), depay);
         gst_object_unref(rtspsrc);
         gst_object_unref(depay);
     }
+
+    // Manually request dynamic sink pad from webrtcbin and link videoqueue
+    GstPad *srcpad = gst_element_get_static_pad(videoqueue, "src");
+    GstPad *sinkpad = gst_element_get_request_pad(app_state.webrtc, "sink_%u");
+    if (srcpad && sinkpad) {
+        if (gst_pad_link(srcpad, sinkpad) == GST_PAD_LINK_OK) {
+            g_print("[GStreamer] Video queue linked to webrtcbin sink pad successfully\n");
+        } else {
+            g_printerr("[GStreamer Error] Could not link video queue to webrtcbin\n");
+        }
+        gst_object_unref(srcpad);
+        gst_object_unref(sinkpad);
+    }
+    gst_object_unref(videoqueue);
 
     g_signal_connect(app_state.webrtc, "on-ice-candidate", G_CALLBACK(on_ice_candidate), NULL);
 
@@ -265,7 +281,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    g_print("C WebRTC Server running on http://0.0.0.0:8080/\n");
+    g_print("C WebRTC Server running on http://10.0.0.210:8080/\n");
 
     GMainLoop *loop = g_main_loop_new(NULL, FALSE);
     g_main_loop_run(loop);
