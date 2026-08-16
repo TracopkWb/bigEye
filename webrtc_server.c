@@ -66,22 +66,30 @@ static void on_answer_created(GstPromise *promise, gpointer user_data) {
 
     GstWebRTCSessionDescription *answer = NULL;
     const GstStructure *reply = gst_promise_get_reply(promise);
-    gst_structure_get(reply, "answer", GST_TYPE_WEBRTC_SESSION_DESCRIPTION, &answer, NULL);
+
+    if (reply) {
+        gst_structure_get(reply, "answer", GST_TYPE_WEBRTC_SESSION_DESCRIPTION, &answer, NULL);
+    }
 
     if (!answer) {
         g_printerr("[Error] Failed to generate Answer SDP from webrtcbin\n");
+        if (reply) {
+            gchar *s = gst_structure_to_string(reply);
+            g_printerr("[Debug Reply Structure] %s\n", s);
+            g_free(s);
+        }
         return;
     }
 
     g_print("[Signaling] SDP Answer generated successfully\n");
 
-    // Set local description in webrtcbin and wait for completion
+    // Set local description in webrtcbin
     GstPromise *local_promise = gst_promise_new();
     g_signal_emit_by_name(app_state.webrtc, "set-local-description", answer, local_promise);
     gst_promise_wait(local_promise);
     gst_promise_unref(local_promise);
 
-    g_print("[Signaling] Local description set. ICE candidate gathering started...\n");
+    g_print("[Signaling] Local description set. ICE gathering active...\n");
 
     // Send Answer SDP back to browser via WebSocket
     gchar *sdp_text = gst_sdp_message_as_text(answer->sdp);
@@ -155,7 +163,7 @@ static void on_ws_message(SoupWebsocketConnection *ws, gint type, GBytes *messag
 
         GstWebRTCSessionDescription *offer = gst_webrtc_session_description_new(GST_WEBRTC_SDP_TYPE_OFFER, sdp);
         
-        // Set remote description and wait for completion
+        // Set remote description and wait
         GstPromise *promise = gst_promise_new();
         g_signal_emit_by_name(app_state.webrtc, "set-remote-description", offer, promise);
         gst_promise_wait(promise);
@@ -197,14 +205,14 @@ static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char 
         app_state.webrtc = NULL;
     }
 
-    // Pipeline string using named queue
+    // Pipeline using explicit capsfilter and named queue
     GError *error = NULL;
     gchar *pipeline_str = g_strdup_printf(
         "webrtcbin name=sendrecv stun-server=stun://stun.l.google.com:19302 "
         "rtspsrc name=rtspsrc location=" RTSP_URL " protocols=udp buffer-mode=0 latency=100 "
         "rtph264depay name=depay ! h264parse ! "
         "rtph264pay config-interval=1 pt=96 ! "
-        "application/x-rtp,media=video,clock-rate=90000,encoding-name=H264,payload=96 ! "
+        "capsfilter caps=\"application/x-rtp,media=video,clock-rate=90000,encoding-name=H264,payload=96\" ! "
         "queue name=videoqueue"
     );
 
@@ -243,6 +251,16 @@ static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char 
         } else {
             g_printerr("[GStreamer Error] Could not link video queue to webrtcbin\n");
         }
+
+        // Configure transceiver direction explicitly to SENDONLY
+        GArray *transceivers = NULL;
+        g_signal_emit_by_name(app_state.webrtc, "get-transceivers", &transceivers);
+        if (transceivers && transceivers->len > 0) {
+            GstWebRTCRTPTransceiver *trans = g_array_index(transceivers, GstWebRTCRTPTransceiver*, transceivers->len - 1);
+            g_object_set(trans, "direction", GST_WEBRTC_RTP_TRANSCEIVER_DIRECTION_SENDONLY, NULL);
+            g_array_unref(transceivers);
+        }
+
         gst_object_unref(srcpad);
         gst_object_unref(sinkpad);
     }
