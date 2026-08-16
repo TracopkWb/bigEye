@@ -27,6 +27,34 @@ static void send_ws_json(SoupWebsocketConnection *ws, JsonNode *root_node) {
     g_object_unref(gen);
 }
 
+// Monitor pipeline errors on the GStreamer Bus
+static gboolean on_bus_message(GstBus *bus, GstMessage *msg, gpointer user_data) {
+    switch (GST_MESSAGE_TYPE(msg)) {
+        case GST_MESSAGE_ERROR: {
+            GError *err = NULL;
+            gchar *debug = NULL;
+            gst_message_parse_error(msg, &err, &debug);
+            g_printerr("[GStreamer Pipeline Error] From %s: %s\n", GST_OBJECT_NAME(msg->src), err->message);
+            g_printerr("[GStreamer Debug Info] %s\n", debug ? debug : "None");
+            g_clear_error(&err);
+            g_free(debug);
+            break;
+        }
+        case GST_MESSAGE_WARNING: {
+            GError *warn = NULL;
+            gchar *debug = NULL;
+            gst_message_parse_warning(msg, &warn, &debug);
+            g_print("[GStreamer Warning] From %s: %s\n", GST_OBJECT_NAME(msg->src), warn->message);
+            g_clear_error(&warn);
+            g_free(debug);
+            break;
+        }
+        default:
+            break;
+    }
+    return TRUE;
+}
+
 // Dynamically link RTSP video stream to depayloader
 static void on_rtspsrc_pad_added(GstElement *src, GstPad *new_pad, gpointer user_data) {
     GstElement *depay = GST_ELEMENT(user_data);
@@ -84,11 +112,8 @@ static void on_answer_created(GstPromise *promise, gpointer user_data) {
     gst_promise_wait(local_promise);
     gst_promise_unref(local_promise);
 
-    g_print("[Signaling] Local description set. ICE gathering active...\n");
-
-    // Send Answer SDP back to browser via WebSocket
+    // Send Answer SDP back to browser
     gchar *sdp_text = gst_sdp_message_as_text(answer->sdp);
-    
     JsonObject *root_obj = json_object_new();
     json_object_set_string_member(root_obj, "type", "answer");
     json_object_set_string_member(root_obj, "sdp", sdp_text);
@@ -105,10 +130,8 @@ static void on_answer_created(GstPromise *promise, gpointer user_data) {
     gst_webrtc_session_description_free(answer);
 }
 
-// Callback when GStreamer generates an ICE Candidate
+// Callback when GStreamer discovers an ICE Candidate
 static void on_ice_candidate(GstElement *webrtc, guint mlineindex, gchar *candidate, gpointer user_data) {
-    g_print("[ICE] Discovered candidate (mline %u): %s\n", mlineindex, candidate);
-
     if (!app_state.ws) return;
 
     JsonObject *root_obj = json_object_new();
@@ -124,15 +147,23 @@ static void on_ice_candidate(GstElement *webrtc, guint mlineindex, gchar *candid
     json_node_set_object(node, root_obj);
     
     send_ws_json(app_state.ws, node);
-    
     json_node_free(node);
     json_object_unref(root_obj);
 }
 
-// Process incoming WebSocket messages from browser
+// Process WebSocket messages
 static void on_ws_message(SoupWebsocketConnection *ws, gint type, GBytes *message, gpointer user_data) {
     if (!app_state.webrtc) {
-        g_printerr("[Error] Cannot process WebSocket message because WebRTC pipeline is null\n");
+        g_printerr("[Error] WebRTC pipeline element is NULL\n");
+        return;
+    }
+
+    // Verify element state before setting SDP
+    GstState current_state, pending_state;
+    gst_element_get_state(app_state.webrtc, &current_state, &pending_state, 0);
+    if (current_state < GST_STATE_READY) {
+        g_printerr("[Error] Cannot process SDP. webrtcbin is not ready (State: %s)\n",
+                   gst_element_state_get_name(current_state));
         return;
     }
 
@@ -155,14 +186,13 @@ static void on_ws_message(SoupWebsocketConnection *ws, gint type, GBytes *messag
         GstSDPMessage *sdp = NULL;
         if (gst_sdp_message_new(&sdp) != GST_SDP_OK || 
             gst_sdp_message_parse_buffer((guint8 *)sdp_str, strlen(sdp_str), sdp) != GST_SDP_OK) {
-            g_printerr("[Error] Failed to parse SDP Offer from browser\n");
+            g_printerr("[Error] Failed to parse SDP Offer\n");
             g_object_unref(parser);
             return;
         }
 
         GstWebRTCSessionDescription *offer = gst_webrtc_session_description_new(GST_WEBRTC_SDP_TYPE_OFFER, sdp);
         
-        // Set remote description and check promise for errors
         GstPromise *promise = gst_promise_new();
         g_signal_emit_by_name(app_state.webrtc, "set-remote-description", offer, promise);
         gst_promise_wait(promise);
@@ -178,10 +208,9 @@ static void on_ws_message(SoupWebsocketConnection *ws, gint type, GBytes *messag
             return;
         }
         gst_promise_unref(promise);
-        
         g_print("[Signaling] Remote description set successfully\n");
 
-        // Request webrtcbin to create Answer
+        // Request Answer generation
         GstPromise *ans_promise = gst_promise_new_with_change_func(on_answer_created, NULL, NULL);
         g_signal_emit_by_name(app_state.webrtc, "create-answer", NULL, ans_promise);
 
@@ -192,14 +221,13 @@ static void on_ws_message(SoupWebsocketConnection *ws, gint type, GBytes *messag
         const gchar *candidate = json_object_get_string_member(cand_obj, "candidate");
         gint mlineindex = json_object_get_int_member(cand_obj, "sdpMLineIndex");
 
-        g_print("[Signaling] Received ICE candidate from browser: %s\n", candidate);
         g_signal_emit_by_name(app_state.webrtc, "add-ice-candidate", mlineindex, candidate);
     }
 
     g_object_unref(parser);
 }
 
-// Handle WebSocket connection initialization
+// Handle WebSocket initialization
 static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char *path, SoupWebsocketConnection *connection, gpointer user_data) {
     g_print("[Signaling] Browser connected via WebSocket\n");
     app_state.ws = connection;
@@ -207,7 +235,6 @@ static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char 
 
     g_signal_connect(connection, "message", G_CALLBACK(on_ws_message), NULL);
 
-    // Clean up old pipeline if reconnecting
     if (app_state.pipeline) {
         gst_element_set_state(app_state.pipeline, GST_STATE_NULL);
         gst_object_unref(app_state.pipeline);
@@ -215,11 +242,10 @@ static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char 
         app_state.webrtc = NULL;
     }
 
-    // Pipeline string omitting strict payload=96 so webrtcbin matches browser's offered payload ID
     GError *error = NULL;
     gchar *pipeline_str = g_strdup_printf(
         "webrtcbin name=sendrecv stun-server=stun://stun.l.google.com:19302 "
-        "rtspsrc name=rtspsrc location=" RTSP_URL " protocols=udp buffer-mode=0 latency=100 "
+        "rtspsrc name=rtspsrc location=" RTSP_URL " protocols=tcp latency=100 "
         "rtph264depay name=depay ! h264parse ! "
         "rtph264pay config-interval=1 ! "
         "capsfilter caps=\"application/x-rtp,media=video,clock-rate=90000,encoding-name=H264\" ! "
@@ -235,46 +261,55 @@ static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char 
         return;
     }
 
+    // Attach Bus Watch to log pipeline/RTSP errors
+    GstBus *bus = gst_element_get_bus(app_state.pipeline);
+    gst_bus_add_watch(bus, on_bus_message, NULL);
+    gst_object_unref(bus);
+
     app_state.webrtc = gst_bin_get_by_name(GST_BIN(app_state.pipeline), "sendrecv");
     GstElement *rtspsrc = gst_bin_get_by_name(GST_BIN(app_state.pipeline), "rtspsrc");
     GstElement *depay = gst_bin_get_by_name(GST_BIN(app_state.pipeline), "depay");
     GstElement *videoqueue = gst_bin_get_by_name(GST_BIN(app_state.pipeline), "videoqueue");
 
     if (!app_state.webrtc || !videoqueue) {
-        g_printerr("[GStreamer Error] Failed to retrieve required pipeline elements\n");
+        g_printerr("[GStreamer Error] Missing pipeline elements\n");
         return;
     }
 
-    // Connect RTSP video pad
     if (rtspsrc && depay) {
         g_signal_connect(rtspsrc, "pad-added", G_CALLBACK(on_rtspsrc_pad_added), depay);
         gst_object_unref(rtspsrc);
         gst_object_unref(depay);
     }
 
-    // Request dynamic sink pad from webrtcbin and link video queue
+    // Explicitly add video transceiver to webrtcbin
+    GstCaps *caps = gst_caps_new_simple("application/x-rtp",
+        "media", G_TYPE_STRING, "video",
+        "clock-rate", G_TYPE_INT, 90000,
+        "encoding-name", G_TYPE_STRING, "H264",
+        NULL);
+    GstWebRTCRTPTransceiver *trans = NULL;
+    g_signal_emit_by_name(app_state.webrtc, "add-transceiver", GST_WEBRTC_RTP_TRANSCEIVER_DIRECTION_SENDONLY, caps, &trans);
+    if (trans) gst_object_unref(trans);
+    gst_caps_unref(caps);
+
+    // Link video queue to webrtcbin
     GstPad *srcpad = gst_element_get_static_pad(videoqueue, "src");
     GstPad *sinkpad = gst_element_request_pad_simple(app_state.webrtc, "sink_%u");
     if (srcpad && sinkpad) {
-        if (gst_pad_link(srcpad, sinkpad) == GST_PAD_LINK_OK) {
-            g_print("[GStreamer] Video queue linked to webrtcbin successfully\n");
-        } else {
-            g_printerr("[GStreamer Error] Could not link video queue to webrtcbin\n");
-        }
-
+        gst_pad_link(srcpad, sinkpad);
         gst_object_unref(srcpad);
         gst_object_unref(sinkpad);
     }
     gst_object_unref(videoqueue);
 
-    // Register ICE candidate callback
     g_signal_connect(app_state.webrtc, "on-ice-candidate", G_CALLBACK(on_ice_candidate), NULL);
 
-    // Start streaming pipeline
+    // Transition to PLAYING and wait for state lock
     gst_element_set_state(app_state.pipeline, GST_STATE_PLAYING);
+    gst_element_get_state(app_state.pipeline, NULL, NULL, 5 * GST_SECOND);
 }
 
-// HTTP callback to serve index.html directly from root or public folder
 static void http_handler(SoupServer *server, SoupServerMessage *msg, const char *path, GHashTable *query, gpointer user_data) {
     gchar *contents = NULL;
     gsize length = 0;
@@ -283,7 +318,6 @@ static void http_handler(SoupServer *server, SoupServerMessage *msg, const char 
     if (!g_file_get_contents("index.html", &contents, &length, &error)) {
         if (error) { g_error_free(error); error = NULL; }
         if (!g_file_get_contents("public/index.html", &contents, &length, &error)) {
-            g_printerr("Could not load index.html: %s\n", error ? error->message : "File not found");
             soup_server_message_set_status(msg, SOUP_STATUS_NOT_FOUND, NULL);
             if (error) g_error_free(error);
             return;
@@ -297,15 +331,7 @@ static void http_handler(SoupServer *server, SoupServerMessage *msg, const char 
 int main(int argc, char *argv[]) {
     gst_init(&argc, &argv);
 
-    // Force software decoding rank rule programmatically
-    GstPluginFeature *feature = gst_registry_find_feature(gst_registry_get(), "v4l2h264dec", GST_TYPE_ELEMENT_FACTORY);
-    if (feature) {
-        gst_plugin_feature_set_rank(feature, GST_RANK_NONE);
-        gst_object_unref(feature);
-    }
-
     SoupServer *server = soup_server_new(NULL, NULL);
-    
     soup_server_add_handler(server, "/", http_handler, NULL, NULL);
     soup_server_add_websocket_handler(server, "/ws", NULL, NULL, on_ws_opened, NULL, NULL);
 
@@ -316,7 +342,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    g_print("C WebRTC Server running on http://10.0.0.10:8080/\n");
+    g_print("C WebRTC Server running on http://0.0.0.0:8080/\n");
 
     GMainLoop *loop = g_main_loop_new(NULL, FALSE);
     g_main_loop_run(loop);
