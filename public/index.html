@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HiLook IP Camera Live View</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        background-color: #121212;
+        color: #ffffff;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        margin: 0;
+      }
+      .container {
+        text-align: center;
+        width: 90%;
+        max-width: 960px;
+      }
+      .video-box {
+        position: relative;
+        background: #000;
+        border-radius: 8px;
+        overflow: hidden;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+        margin-top: 15px;
+      }
+      video {
+        width: 100%;
+        height: auto;
+        display: block;
+      }
+      .status {
+        margin-top: 10px;
+        font-size: 0.95rem;
+        color: #4caf50;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h2>HiLook Camera — Live Stream</h2>
+      <div class="video-box">
+        <video id="remoteVideo" autoplay playsinline muted></video>
+      </div>
+      <div class="status" id="statusText">Connecting to server...</div>
+    </div>
+
+    <script>
+      const statusText = document.getElementById("statusText");
+      const remoteVideo = document.getElementById("remoteVideo");
+
+      const ws = new WebSocket(`ws://${location.host}`);
+      let pc = new RTCPeerConnection({
+        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+      });
+
+      ws.onopen = () => {
+        statusText.innerText =
+          "Connected to signaling server. Initiating WebRTC...";
+      };
+
+      pc.ontrack = (event) => {
+        console.log("Receiving track...", event.streams[0]);
+        remoteVideo.srcObject = event.streams[0];
+        statusText.innerText = "Live Stream Active";
+      };
+
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          ws.send(
+            JSON.stringify({ type: "candidate", candidate: event.candidate }),
+          );
+        }
+      };
+    </script>
+  </body>
+</html>
