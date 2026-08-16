@@ -1,76 +1,109 @@
 <!doctype html>
 <html>
   <head>
-    <title>bigEye RTSP Live Stream</title>
+    <meta charset="UTF-8" />
+    <title>bigEye RTSP WebRTC Stream</title>
     <style>
       body {
-        background: #121212;
-        color: #fff;
-        font-family: sans-serif;
+        background-color: #121212;
+        color: #ffffff;
+        font-family: Arial, sans-serif;
         text-align: center;
-        margin-top: 40px;
+        margin-top: 30px;
       }
       video {
         width: 90%;
         max-width: 960px;
+        height: auto;
         background: #000;
-        border: 1px solid #444;
+        border: 2px solid #333;
         border-radius: 8px;
       }
       #status {
         margin-top: 15px;
-        color: #00ffcc;
         font-weight: bold;
+        color: #00e676;
       }
     </style>
   </head>
   <body>
-    <h2>bigEye RTSP Live Stream</h2>
+    <h2>bigEye Live Stream</h2>
+    <!-- Video element MUST contain muted, autoplay, and playsinline -->
     <video id="remoteVideo" autoplay playsinline muted controls></video>
-    <div id="status">Connecting to WebSocket...</div>
+    <div id="status">Connecting...</div>
 
     <script>
-      const status = document.getElementById("status");
-      const video = document.getElementById("remoteVideo");
-      const ws = new WebSocket(`ws://${location.host}/ws`);
-      let pc = new RTCPeerConnection({
+      const statusDiv = document.getElementById("status");
+      const videoElem = document.getElementById("remoteVideo");
+
+      const ws = new WebSocket(`ws://${window.location.host}/ws`);
+      const pc = new RTCPeerConnection({
         iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
       });
 
+      // Listen for incoming media track from GStreamer
       pc.ontrack = (event) => {
         console.log("[WebRTC] Received remote track:", event.track.kind);
-        const video = document.getElementById("remoteVideo");
-        if (video) {
-          video.srcObject = event.streams[0] || new MediaStream([event.track]);
-          video.play().catch((e) => console.error("Playback failed:", e));
+        statusDiv.innerText = "Stream Live";
+
+        if (event.streams && event.streams[0]) {
+          videoElem.srcObject = event.streams[0];
+        } else {
+          videoElem.srcObject = new MediaStream([event.track]);
         }
+
+        videoElem.play().catch((err) => {
+          console.warn("[WebRTC] Autoplay blocked, playing muted:", err);
+          videoElem.muted = true;
+          videoElem.play();
+        });
       };
 
+      // Send browser ICE candidates back to C server
       pc.onicecandidate = (event) => {
         if (event.candidate && ws.readyState === WebSocket.OPEN) {
           ws.send(
-            JSON.stringify({ type: "candidate", candidate: event.candidate }),
+            JSON.stringify({
+              type: "candidate",
+              candidate: event.candidate,
+            }),
           );
         }
       };
 
       ws.onopen = async () => {
-        status.innerText = "WebSocket Connected. Initiating WebRTC...";
+        statusDiv.innerText =
+          "WebSocket Connected. Initiating WebRTC Handshake...";
+
+        // Force WebRTC to expect incoming video
         pc.addTransceiver("video", { direction: "recvonly" });
 
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
-        ws.send(JSON.stringify({ type: "offer", sdp: offer.sdp }));
+
+        ws.send(
+          JSON.stringify({
+            type: "offer",
+            sdp: offer.sdp,
+          }),
+        );
       };
 
       ws.onmessage = async (msg) => {
         const data = JSON.parse(msg.data);
+
         if (data.type === "answer") {
+          console.log("[Signaling] Received Answer SDP from server");
           await pc.setRemoteDescription(new RTCSessionDescription(data));
-          status.innerText = "WebRTC Connected. Waiting for video frames...";
+          statusDiv.innerText = "Negotiation complete. Receiving stream...";
         } else if (data.type === "candidate" && data.candidate) {
           await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
         }
+      };
+
+      ws.onclose = () => {
+        statusDiv.innerText = "WebSocket Disconnected";
+        statusDiv.style.color = "#ff5252";
       };
     </script>
   </body>
