@@ -134,11 +134,12 @@ static void on_rtspsrc_pad_added(GstElement *src, GstPad *new_pad, gpointer user
 // Handle incoming signaling messages from browser
 static void on_ws_message(SoupWebsocketConnection *conn, SoupWebsocketDataType type, GBytes *message, gpointer user_data)
 {
-    if (!app_state.webrtc) {
+    if (!app_state.webrtc)
+    {
         g_printerr("[Signaling Error] Cannot process signaling message: WebRTC element is NULL.\n");
         return;
     }
-    
+
     gsize size;
     const gchar *data = g_bytes_get_data(message, &size);
 
@@ -220,16 +221,13 @@ static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char 
         app_state.webrtc = NULL;
     }
 
-#define RTSP_USER "bigEye"
-#define RTSP_PASS "traHiLook1"
-#define RTSP_URL "rtsp://10.0.0.210:554/Streaming/Channels/101"
-
     gchar *pipeline_str = g_strdup_printf(
         "webrtcbin name=sendrecv stun-server=stun://stun.l.google.com:19302 "
         "rtspsrc name=rtspsrc location=\"rtsp://10.0.0.210:554/Streaming/Channels/101\" "
-        "user-id=\"bigEye\" user-pw=\"traHiLook1\" protocols=udp latency=200 ! "
-        "rtph264depay name=depay ! h264parse config-interval=-1 ! "
-        "video/x-h264,stream-format=byte-stream,alignment=au ! "
+        "user-id=\"bigEye\" user-pw=\"traHiLook1\" protocols=tcp latency=100 ! "
+        "rtph264depay name=depay ! h264parse ! avdec_h264 ! "
+        "videoconvert ! x264enc speed-preset=ultrafast tune=zerolatency key-int-max=15 ! "
+        "video/x-h264,profile=baseline ! "
         "rtph264pay config-interval=1 pt=96 aggregate-mode=zero-latency ! "
         "application/x-rtp,media=video,clock-rate=90000,encoding-name=H264,payload=96 ! "
         "queue name=videoqueue");
