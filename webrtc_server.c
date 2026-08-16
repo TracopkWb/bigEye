@@ -227,9 +227,9 @@ static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char 
         "webrtcbin name=sendrecv stun-server=stun://stun.l.google.com:19302 "
         "rtspsrc name=rtspsrc location=" RTSP_URL " protocols=udp latency=500 drop-on-latency=true "
         "rtph264depay name=depay ! queue leaky=downstream max-size-buffers=10 ! "
-        "h264parse ! "
+        "h264parse config-interval=1 ! "
         "rtph264pay config-interval=1 pt=96 aggregate-mode=zero-latency ! "
-        "capsfilter caps=\"application/x-rtp,media=video,clock-rate=90000,encoding-name=H264\" ! "
+        "capsfilter caps=\"application/x-rtp,media=video,clock-rate=90000,encoding-name=H264,payload=96\" ! "
         "queue name=videoqueue");
 
     GError *error = NULL;

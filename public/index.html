@@ -57,6 +57,7 @@
               candidate: {
                 candidate: event.candidate.candidate,
                 sdpMLineIndex: event.candidate.sdpMLineIndex,
+                g,
               },
             }),
           );
@@ -65,12 +66,19 @@
 
       // 2. Attach incoming media track
       pc.ontrack = (event) => {
-        console.log("Track received!", event.streams);
-        if (video.srcObject !== event.streams[0]) {
-          video.srcObject = event.streams[0];
+        console.log("[WebRTC] Received remote track:", event.track.kind);
+        const stream =
+          event.streams && event.streams[0]
+            ? event.streams[0]
+            : new MediaStream([event.track]);
+
+        if (video.srcObject !== stream) {
+          video.srcObject = stream;
+          video
+            .play()
+            .catch((e) => console.error("Autoplay blocked or play error:", e));
         }
       };
-
       ws.onopen = async () => {
         // Force WebRTC direction to recvonly
         pc.addTransceiver("video", { direction: "recvonly" });
