@@ -1,126 +1,59 @@
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>bigEye WebRTC Stream</title>
+<!DOCTYPE html>
+<html>
+<head>
+    <title>bigEye RTSP Live Stream</title>
     <style>
-      body {
-        font-family: Arial, sans-serif;
-        background-color: #121212;
-        color: #ffffff;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        min-height: 100vh;
-        margin: 0;
-      }
-      .container {
-        text-align: center;
-        width: 90%;
-        max-width: 960px;
-      }
-      video {
-        width: 100%;
-        background: #000000;
-        border-radius: 8px;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
-      }
-      #status {
-        margin-top: 12px;
-        font-size: 14px;
-        color: #00e676;
-      }
+        body { background: #121212; color: #fff; font-family: sans-serif; text-align: center; margin-top: 40px; }
+        video { width: 90%; max-width: 960px; background: #000; border: 1px solid #444; border-radius: 8px; }
+        #status { margin-top: 15px; color: #00ffcc; font-weight: bold; }
     </style>
-  </head>
-  <body>
-    <div class="container">
-      <h2>bigEye RTSP Live Stream</h2>
-      <video
-        id="remoteVideo"
-        autoplay
-        playsinline
-        muted
-        controls
-        style="width: 100%; max-width: 960px; background: #000"
-      ></video>
-      <div id="status">Connecting to WebSocket...</div>
-    </div>
+</head>
+<body>
+    <h2>bigEye RTSP Live Stream</h2>
+    <video id="remoteVideo" autoplay playsinline muted controls></video>
+    <div id="status">Connecting to WebSocket...</div>
 
     <script>
-      const video = document.getElementById("remoteVideo");
-      const ws = new WebSocket(`ws://${window.location.host}/ws`);
-      let pc = new RTCPeerConnection({
-        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-      });
+        const status = document.getElementById('status');
+        const video = document.getElementById('remoteVideo');
+        const ws = new WebSocket(`ws://${location.host}/ws`);
+        let pc = new RTCPeerConnection({
+            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+        });
 
-      // 1. Send browser candidates to C server
-      pc.onicecandidate = (event) => {
-        if (event.candidate) {
-          ws.send(
-            JSON.stringify({
-              type: "candidate",
-              candidate: {
-                candidate: event.candidate.candidate,
-                sdpMLineIndex: event.candidate.sdpMLineIndex,
-                g,
-              },
-            }),
-          );
-        }
-      };
+        pc.ontrack = (event) => {
+            console.log("[WebRTC] Received remote track:", event.track.kind);
+            status.innerText = "Stream Live";
+            if (video.srcObject !== event.streams[0]) {
+                video.srcObject = event.streams[0] || new MediaStream([event.track]);
+                video.play().catch(e => console.error("Play error:", e));
+            }
+        };
 
-      // 2. Attach incoming media track
-      pc.ontrack = (event) => {
-        console.log("[WebRTC] Remote track received:", event.track.kind);
-        const video = document.getElementById("remoteVideo");
+        pc.onicecandidate = (event) => {
+            if (event.candidate && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'candidate', candidate: event.candidate }));
+            }
+        };
 
-        if (event.streams && event.streams[0]) {
-          video.srcObject = event.streams[0];
-        } else {
-          const inboundStream = new MediaStream([event.track]);
-          video.srcObject = inboundStream;
-        }
+        ws.onopen = async () => {
+            status.innerText = "WebSocket Connected. Initiating WebRTC...";
+            pc.addTransceiver('video', { direction: 'recvonly' });
 
-        video.play().catch((e) => console.error("Autoplay failed:", e));
-      };
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            ws.send(JSON.stringify({ type: 'offer', sdp: offer.sdp }));
+        };
 
-      ws.onopen = async () => {
-        status.innerText = "Connected. Initializing WebRTC...";
-
-        // Instruct browser to request incoming video track
-        pc.addTransceiver("video", { direction: "recvonly" });
-
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-
-        ws.send(
-          JSON.stringify({
-            type: "offer",
-            sdp: offer.sdp,
-          }),
-        );
-      };
-      ws.onmessage = async (msg) => {
-        const data = JSON.parse(msg.data);
-
-        if (data.type === "answer") {
-          await pc.setRemoteDescription(
-            new RTCSessionDescription({
-              type: "answer",
-              sdp: data.sdp,
-            }),
-          );
-        } else if (data.type === "candidate" && data.candidate) {
-          // 3. Receive candidates trickled from GStreamer
-          try {
-            await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
-          } catch (e) {
-            console.error("Error adding ice candidate", e);
-          }
-        }
-      };
+        ws.onmessage = async (msg) => {
+            const data = JSON.parse(msg.data);
+            if (data.type === 'answer') {
+                await pc.setRemoteDescription(new RTCSessionDescription(data));
+                status.innerText = "WebRTC Connected. Waiting for video frames...";
+            } else if (data.type === 'candidate' && data.candidate) {
+                await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+            }
+        };
     </script>
-  </body>
+</body>
 </html>
