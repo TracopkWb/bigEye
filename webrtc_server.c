@@ -67,14 +67,21 @@ static void on_answer_created(GstPromise *promise, gpointer user_data) {
     GstWebRTCSessionDescription *answer = NULL;
     const GstStructure *reply = gst_promise_get_reply(promise);
     gst_structure_get(reply, "answer", GST_TYPE_WEBRTC_SESSION_DESCRIPTION, &answer, NULL);
-    gst_promise_unref(promise);
 
-    if (!answer) return;
+    if (!answer) {
+        g_printerr("[Error] Failed to generate Answer SDP from webrtcbin\n");
+        return;
+    }
 
-    // Set local description in webrtcbin
+    g_print("[Signaling] SDP Answer generated successfully\n");
+
+    // Set local description in webrtcbin and wait for completion
     GstPromise *local_promise = gst_promise_new();
     g_signal_emit_by_name(app_state.webrtc, "set-local-description", answer, local_promise);
+    gst_promise_wait(local_promise);
     gst_promise_unref(local_promise);
+
+    g_print("[Signaling] Local description set. ICE candidate gathering started...\n");
 
     // Send Answer SDP back to browser via WebSocket
     gchar *sdp_text = gst_sdp_message_as_text(answer->sdp);
@@ -87,6 +94,7 @@ static void on_answer_created(GstPromise *promise, gpointer user_data) {
     json_node_set_object(node, root_obj);
     
     send_ws_json(app_state.ws, node);
+    g_print("[Signaling] Sent SDP Answer to browser\n");
     
     json_node_free(node);
     json_object_unref(root_obj);
@@ -96,6 +104,8 @@ static void on_answer_created(GstPromise *promise, gpointer user_data) {
 
 // Callback when GStreamer generates an ICE Candidate
 static void on_ice_candidate(GstElement *webrtc, guint mlineindex, gchar *candidate, gpointer user_data) {
+    g_print("[ICE] Discovered candidate (mline %u): %s\n", mlineindex, candidate);
+
     if (!app_state.ws) return;
 
     JsonObject *root_obj = json_object_new();
@@ -145,11 +155,15 @@ static void on_ws_message(SoupWebsocketConnection *ws, gint type, GBytes *messag
 
         GstWebRTCSessionDescription *offer = gst_webrtc_session_description_new(GST_WEBRTC_SDP_TYPE_OFFER, sdp);
         
+        // Set remote description and wait for completion
         GstPromise *promise = gst_promise_new();
         g_signal_emit_by_name(app_state.webrtc, "set-remote-description", offer, promise);
+        gst_promise_wait(promise);
         gst_promise_unref(promise);
+        
+        g_print("[Signaling] Remote description set successfully\n");
 
-        // Ask webrtcbin to generate Answer
+        // Request webrtcbin to create Answer
         GstPromise *ans_promise = gst_promise_new_with_change_func(on_answer_created, NULL, NULL);
         g_signal_emit_by_name(app_state.webrtc, "create-answer", NULL, ans_promise);
 
@@ -160,6 +174,7 @@ static void on_ws_message(SoupWebsocketConnection *ws, gint type, GBytes *messag
         const gchar *candidate = json_object_get_string_member(cand_obj, "candidate");
         gint mlineindex = json_object_get_int_member(cand_obj, "sdpMLineIndex");
 
+        g_print("[Signaling] Received ICE candidate from browser: %s\n", candidate);
         g_signal_emit_by_name(app_state.webrtc, "add-ice-candidate", mlineindex, candidate);
     }
 
@@ -182,7 +197,7 @@ static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char 
         app_state.webrtc = NULL;
     }
 
-    // Build pipeline up to named queue
+    // Pipeline string using named queue
     GError *error = NULL;
     gchar *pipeline_str = g_strdup_printf(
         "webrtcbin name=sendrecv stun-server=stun://stun.l.google.com:19302 "
@@ -208,7 +223,7 @@ static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char 
     GstElement *videoqueue = gst_bin_get_by_name(GST_BIN(app_state.pipeline), "videoqueue");
 
     if (!app_state.webrtc || !videoqueue) {
-        g_printerr("[GStreamer Error] Failed to retrieve required elements\n");
+        g_printerr("[GStreamer Error] Failed to retrieve required pipeline elements\n");
         return;
     }
 
@@ -219,12 +234,12 @@ static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char 
         gst_object_unref(depay);
     }
 
-    // Manually request dynamic sink pad from webrtcbin and link videoqueue
+    // Request dynamic sink pad from webrtcbin and link video queue
     GstPad *srcpad = gst_element_get_static_pad(videoqueue, "src");
     GstPad *sinkpad = gst_element_request_pad_simple(app_state.webrtc, "sink_%u");
     if (srcpad && sinkpad) {
         if (gst_pad_link(srcpad, sinkpad) == GST_PAD_LINK_OK) {
-            g_print("[GStreamer] Video queue linked to webrtcbin sink pad successfully\n");
+            g_print("[GStreamer] Video queue linked to webrtcbin successfully\n");
         } else {
             g_printerr("[GStreamer Error] Could not link video queue to webrtcbin\n");
         }
@@ -233,6 +248,7 @@ static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char 
     }
     gst_object_unref(videoqueue);
 
+    // Register ICE candidate callback
     g_signal_connect(app_state.webrtc, "on-ice-candidate", G_CALLBACK(on_ice_candidate), NULL);
 
     // Start streaming pipeline
@@ -281,7 +297,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    g_print("C WebRTC Server running on http://10.0.0.210:8080/\n");
+    g_print("C WebRTC Server running on http://10.0.0.10:8080/\n");
 
     GMainLoop *loop = g_main_loop_new(NULL, FALSE);
     g_main_loop_run(loop);
