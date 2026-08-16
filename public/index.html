@@ -74,11 +74,16 @@
       // 2. Attach incoming media track
       pc.ontrack = (event) => {
         console.log("[WebRTC] Remote track received:", event.track.kind);
-        const remoteVideo = document.getElementById("remoteVideo");
-        if (remoteVideo.srcObject !== event.streams[0]) {
-          remoteVideo.srcObject = event.streams[0];
-          remoteVideo.play().catch((e) => console.error("Play error:", e));
+        const video = document.getElementById("remoteVideo");
+
+        if (event.streams && event.streams[0]) {
+          video.srcObject = event.streams[0];
+        } else {
+          const inboundStream = new MediaStream([event.track]);
+          video.srcObject = inboundStream;
         }
+
+        video.play().catch((e) => console.error("Autoplay failed:", e));
       };
 
       ws.onopen = async () => {
