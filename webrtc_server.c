@@ -216,10 +216,11 @@ static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char 
     }
     gchar *pipeline_str = g_strdup_printf(
         "webrtcbin name=sendrecv stun-server=stun://stun.l.google.com:19302 "
-        "rtspsrc name=rtspsrc location=" RTSP_URL " protocols=tcp+udp latency=100 timeout=5000000 "
-        "rtph264depay name=depay ! "
-        "h264parse config-interval=-1 ! "
-        "rtph264pay config-interval=1 pt=96 aggregate-mode=zero-latency ! "
+        "rtspsrc name=rtspsrc location=" RTSP_URL " protocols=tcp+udp latency=100 ! "
+        "rtph264depay name=depay ! h264parse ! avdec_h264 ! "
+        "x264enc speed-preset=ultrafast tune=zerolatency key-int-max=15 ! "
+        "video/x-h264,profile=baseline ! "
+        "rtph264pay config-interval=1 pt=96 ! "
         "application/x-rtp,media=video,clock-rate=90000,encoding-name=H264,payload=96 ! "
         "queue name=videoqueue");
 
