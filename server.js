@@ -65,7 +65,7 @@ wss.on("connection", (ws) => {
   });
 });
 
-const PORT = 3000;
+const PORT = 1234;
 server.listen(PORT, () => {
   console.log(`Server running at http://localhost:${PORT}`);
 });
