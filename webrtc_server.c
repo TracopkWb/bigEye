@@ -221,7 +221,7 @@ static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char 
 
     // Manually request dynamic sink pad from webrtcbin and link videoqueue
     GstPad *srcpad = gst_element_get_static_pad(videoqueue, "src");
-    GstPad *sinkpad = gst_element_get_request_pad(app_state.webrtc, "sink_%u");
+    GstPad *sinkpad = gst_element_request_pad_simple(app_state.webrtc, "sink_%u");
     if (srcpad && sinkpad) {
         if (gst_pad_link(srcpad, sinkpad) == GST_PAD_LINK_OK) {
             g_print("[GStreamer] Video queue linked to webrtcbin sink pad successfully\n");
