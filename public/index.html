@@ -1,78 +1,85 @@
-<!doctype html>
-<html>
-  <head>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
     <title>BigEye WebRTC Stream</title>
     <style>
-      body {
-        background: #111;
-        color: #fff;
-        font-family: sans-serif;
-        text-align: center;
-        margin: 0;
-        padding: 20px;
-      }
-      video {
-        width: 80%;
-        max-width: 1280px;
-        background: #000;
-        border: 2px solid #333;
-        border-radius: 8px;
-      }
-      #status {
-        margin-top: 10px;
-        color: #0f0;
-      }
+        body { background: #111; color: #fff; font-family: sans-serif; text-align: center; margin: 0; padding: 20px; }
+        video { width: 80%; max-width: 1280px; background: #000; border: 2px solid #333; border-radius: 8px; }
+        #status { margin-top: 10px; color: #0f0; font-weight: bold; }
     </style>
-  </head>
-  <body>
+</head>
+<body>
     <h2>Hikvision Live WebRTC Feed</h2>
     <video id="remoteVideo" autoplay playsinline controls muted></video>
     <div id="status">Connecting...</div>
 
     <script>
-      const video = document.getElementById("remoteVideo");
-      const status = document.getElementById("status");
+        const video = document.getElementById('remoteVideo');
+        const status = document.getElementById('status');
+        
+        let pc = new RTCPeerConnection({
+            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+        });
 
-      const pc = new RTCPeerConnection({
-        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-      });
+        // Dynamic WebSocket URL based on current host
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${wsProtocol}//${window.location.hostname}:8080/ws`;
+        const ws = new WebSocket(wsUrl);
 
-      const ws = new WebSocket(`ws://${window.location.hostname}:8080/ws`);
+        pc.ontrack = (event) => {
+            console.log("Received remote track:", event);
+            if (video.srcObject !== event.streams[0]) {
+                video.srcObject = event.streams[0];
+                status.innerText = "Stream Connected!";
+            }
+        };
 
-      pc.ontrack = (event) => {
-        if (video.srcObject !== event.streams[0]) {
-          video.srcObject = event.streams[0];
-          status.innerText = "Stream Connected!";
-        }
-      };
+        pc.onicecandidate = (event) => {
+            if (event.candidate) {
+                console.log("Sending local ICE candidate:", event.candidate);
+                ws.send(JSON.stringify({ ice: event.candidate }));
+            }
+        };
 
-      pc.onicecandidate = (event) => {
-        if (event.candidate) {
-          ws.send(JSON.stringify({ ice: event.candidate }));
-        }
-      };
+        ws.onopen = async () => {
+            console.log("WebSocket connected. Generating SDP offer...");
+            status.innerText = "WebSocket Connected. Negotiating stream...";
+            
+            // Add receive-only video transceiver to trigger stream negotiation
+            pc.addTransceiver('video', { direction: 'recvonly' });
+            
+            try {
+                const offer = await pc.createOffer();
+                await pc.setLocalDescription(offer);
+                console.log("Sending SDP Offer:", offer);
+                ws.send(JSON.stringify({ sdp: offer }));
+            } catch (err) {
+                console.error("Error creating offer:", err);
+                status.innerText = "Error creating offer";
+            }
+        };
 
-      ws.onopen = async () => {
-        status.innerText = "WebSocket Connected. Requesting Stream...";
-        pc.addTransceiver("video", { direction: "recvonly" });
+        ws.onmessage = async (event) => {
+            const msg = JSON.parse(event.data);
+            
+            if (msg.sdp) {
+                console.log("Received SDP Answer from server:", msg.sdp);
+                await pc.setRemoteDescription(new RTCSessionDescription({
+                    type: 'answer',
+                    sdp: msg.sdp
+                }));
+            } else if (msg.ice) {
+                console.log("Received ICE candidate from server:", msg.ice);
+                await pc.addIceCandidate(new RTCIceCandidate({
+                    candidate: msg.ice.candidate,
+                    sdpMLineIndex: msg.ice.sdpMLineIndex
+                }));
+            }
+        };
 
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        ws.send(JSON.stringify({ sdp: offer }));
-      };
-
-      ws.onmessage = async (event) => {
-        const msg = JSON.parse(event.data);
-        if (msg.sdp) {
-          await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
-        } else if (msg.ice) {
-          await pc.addIceCandidate(new RTCIceCandidate(msg.ice));
-        }
-      };
-
-      ws.onclose = () => {
-        status.innerText = "Signaling Connection Closed.";
-      };
+        ws.onclose = () => { status.innerText = "Signaling connection closed."; };
+        ws.onerror = (err) => { console.error("WebSocket error:", err); };
     </script>
-  </body>
+</body>
 </html>
