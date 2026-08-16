@@ -120,8 +120,7 @@ static void on_ws_message(SoupWebsocketConnection *conn, SoupWebsocketDataType t
     g_object_unref(parser);
 }
 
-// Fixed: SoupServerMessage* replaces SoupClientContext* for libsoup-3.0 compatibility
-static void on_ws_opened(SoupServer *server, SoupWebsocketConnection *conn, const char *path, SoupServerMessage *msg, gpointer user_data)
+static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char *path, SoupWebsocketConnection *conn, gpointer user_data)
 {
     g_print("[Signaling] Browser connected via WebSocket\n");
     app_state.ws = conn;
