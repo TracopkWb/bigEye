@@ -18,6 +18,7 @@ static AppState app_state;
 
 // Helper to send JSON messages over WebSocket
 static void send_ws_json(SoupWebsocketConnection *ws, JsonNode *root_node) {
+    if (!ws) return;
     JsonGenerator *gen = json_generator_new();
     json_generator_set_root(gen, root_node);
     gchar *data = json_generator_to_data(gen, NULL);
@@ -28,10 +29,14 @@ static void send_ws_json(SoupWebsocketConnection *ws, JsonNode *root_node) {
 
 // Callback when GStreamer creates an Answer
 static void on_answer_created(GstPromise *promise, gpointer user_data) {
+    if (!app_state.webrtc || !app_state.ws) return;
+
     GstWebRTCSessionDescription *answer = NULL;
     const GstStructure *reply = gst_promise_get_reply(promise);
     gst_structure_get(reply, "answer", GST_TYPE_WEBRTC_SESSION_DESCRIPTION, &answer, NULL);
     gst_promise_unref(promise);
+
+    if (!answer) return;
 
     // Set local description in webrtcbin
     GstPromise *local_promise = gst_promise_new();
@@ -58,6 +63,8 @@ static void on_answer_created(GstPromise *promise, gpointer user_data) {
 
 // Callback when GStreamer generates an ICE Candidate
 static void on_ice_candidate(GstElement *webrtc, guint mlineindex, gchar *candidate, gpointer user_data) {
+    if (!app_state.ws) return;
+
     JsonObject *root_obj = json_object_new();
     json_object_set_string_member(root_obj, "type", "candidate");
     
@@ -78,6 +85,11 @@ static void on_ice_candidate(GstElement *webrtc, guint mlineindex, gchar *candid
 
 // Process incoming WebSocket messages from browser
 static void on_ws_message(SoupWebsocketConnection *ws, gint type, GBytes *message, gpointer user_data) {
+    if (!app_state.webrtc) {
+        g_printerr("[Error] Cannot process WebSocket message because WebRTC pipeline is null\n");
+        return;
+    }
+
     gsize size;
     const gchar *data = g_bytes_get_data(message, &size);
     
@@ -129,12 +141,21 @@ static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char 
 
     g_signal_connect(connection, "message", G_CALLBACK(on_ws_message), NULL);
 
-    // Build GStreamer pipeline
+    // Clean up old pipeline if reconnecting
+    if (app_state.pipeline) {
+        gst_element_set_state(app_state.pipeline, GST_STATE_NULL);
+        gst_object_unref(app_state.pipeline);
+        app_state.pipeline = NULL;
+        app_state.webrtc = NULL;
+    }
+
+    // Explicitly link rtph264pay to sendrecv.sink_0
     GError *error = NULL;
     gchar *pipeline_str = g_strdup_printf(
+        "webrtcbin name=sendrecv stun-server=stun://stun.l.google.com:19302 "
         "rtspsrc location=" RTSP_URL " protocols=udp buffer-mode=0 latency=100 ! "
         "rtph264depay ! h264parse ! rtph264pay config-interval=1 pt=96 ! "
-        "webrtcbin name=sendrecv stun-server=stun://stun.l.google.com:19302"
+        "sendrecv.sink_0"
     );
 
     app_state.pipeline = gst_parse_launch(pipeline_str, &error);
@@ -147,6 +168,11 @@ static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char 
     }
 
     app_state.webrtc = gst_bin_get_by_name(GST_BIN(app_state.pipeline), "sendrecv");
+    if (!app_state.webrtc) {
+        g_printerr("[GStreamer Error] Failed to retrieve sendrecv element\n");
+        return;
+    }
+
     g_signal_connect(app_state.webrtc, "on-ice-candidate", G_CALLBACK(on_ice_candidate), NULL);
 
     // Start streaming pipeline
@@ -159,11 +185,10 @@ static void http_handler(SoupServer *server, SoupServerMessage *msg, const char 
     gsize length = 0;
     GError *error = NULL;
 
-    // Check root index.html first, then fall back to public/index.html
     if (!g_file_get_contents("index.html", &contents, &length, &error)) {
         if (error) { g_error_free(error); error = NULL; }
         if (!g_file_get_contents("public/index.html", &contents, &length, &error)) {
-            g_printerr("Could not load index.html from . or public/: %s\n", error ? error->message : "File not found");
+            g_printerr("Could not load index.html: %s\n", error ? error->message : "File not found");
             soup_server_message_set_status(msg, SOUP_STATUS_NOT_FOUND, NULL);
             if (error) g_error_free(error);
             return;
@@ -186,10 +211,7 @@ int main(int argc, char *argv[]) {
 
     SoupServer *server = soup_server_new(NULL, NULL);
     
-    // Serve HTML static file on root / and /public/
     soup_server_add_handler(server, "/", http_handler, NULL, NULL);
-
-    // Serve WebSockets on /ws
     soup_server_add_websocket_handler(server, "/ws", NULL, NULL, on_ws_opened, NULL, NULL);
 
     GError *error = NULL;
