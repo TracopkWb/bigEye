@@ -224,11 +224,10 @@ static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char 
     gchar *pipeline_str = g_strdup_printf(
         "webrtcbin name=sendrecv stun-server=stun://stun.l.google.com:19302 "
         "rtspsrc name=rtspsrc location=\"rtsp://10.0.0.210:554/Streaming/Channels/102\" "
-        "user-id=\"bigEye\" user-pw=\"traHiLook1\" protocols=udp latency=200 ! "
-        "rtph264depay ! h264parse ! avdec_h264 ! "
-        "videoconvert ! video/x-raw,format=I420 ! "
+        "user-id=\"bigEye\" user-pw=\"traHiLook1\" protocols=tcp latency=200 ! "
+        "rtph264depay ! h264parse ! avdec_h264 ! videoconvert ! "
         "x264enc speed-preset=ultrafast tune=zerolatency key-int-max=15 ! "
-        "video/x-h264,profile=baseline,stream-format=byte-stream,alignment=au ! "
+        "video/x-h264,profile=constrained-baseline,stream-format=byte-stream,alignment=au ! "
         "rtph264pay config-interval=1 pt=96 aggregate-mode=zero-latency ! "
         "application/x-rtp,media=video,clock-rate=90000,encoding-name=H264,payload=96 ! "
         "queue name=videoqueue");
@@ -239,10 +238,38 @@ static void on_ws_opened(SoupServer *server, SoupServerMessage *msg, const char 
 
     if (error)
     {
-        g_printerr("[GStreamer Error] %s\n", error->message);
-        g_error_free(error);
+        g_printerr("Pipeline parse error: %s\n", error->message);
+        g_clear_error(&error);
         return;
     }
+    
+    // --- START OF STEP 2 CODE ---
+    GstElement *webrtc = gst_bin_get_by_name(GST_BIN(app_state.pipeline), "sendrecv");
+    GstElement *queue = gst_bin_get_by_name(GST_BIN(app_state.pipeline), "videoqueue");
+
+    if (webrtc && queue)
+    {
+        GstPad *srcpad = gst_element_get_static_pad(queue, "src");
+        GstPad *sinkpad = gst_element_request_pad_simple(webrtc, "sink_%u");
+
+        if (gst_pad_link(srcpad, sinkpad) != GST_PAD_LINK_OK)
+        {
+            g_printerr("[GStreamer Error] Failed to link videoqueue to webrtcbin!\n");
+        }
+        else
+        {
+            g_print("[GStreamer] Explicitly linked videoqueue to webrtcbin sink pad\n");
+        }
+
+        gst_object_unref(srcpad);
+        gst_object_unref(sinkpad);
+        gst_object_unref(webrtc);
+        gst_object_unref(queue);
+    }
+    // --- END OF STEP 2 CODE ---
+
+    // Next, set pipeline to PLAYING state as normal:
+    gst_element_set_state(app_state.pipeline, GST_STATE_PLAYING);
 
     GstBus *bus = gst_element_get_bus(app_state.pipeline);
     gst_bus_add_watch(bus, on_bus_message, NULL);
